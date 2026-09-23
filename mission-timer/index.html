@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>25:00 · 任務計時器</title>
+<style>
+  :root {
+    --bg: #03050b;
+    --ink: #e9f1ff;
+    --muted: #8b95a7;
+    --line: rgba(255, 255, 255, .14);
+    --neon: 125, 249, 255;
+    --tint: 110, 175, 255;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang TC", "Noto Sans TC", sans-serif;
+    overflow: hidden;
+  }
+  #bg { position: fixed; inset: 0; width: 100%; height: 100%; }
+
+  /* ---------- 行星選擇 ---------- */
+  .planets {
+    position: fixed; top: 20px; left: 20px; z-index: 2;
+    display: flex; gap: 4px; padding: 5px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--neon), .16);
+    background: rgba(6, 12, 26, .55);
+    backdrop-filter: blur(8px);
+  }
+  .planets button {
+    display: flex; align-items: center; gap: 7px;
+    font: 500 12px/1 inherit; font-family: inherit; letter-spacing: .1em;
+    color: var(--muted);
+    background: none; border: 0; border-radius: 999px;
+    padding: 8px 13px 8px 9px;
+    cursor: pointer;
+    transition: background .2s, color .2s, box-shadow .2s;
+  }
+  .planets button:hover { color: var(--ink); background: rgba(255, 255, 255, .06); }
+  .planets button[aria-pressed="true"] {
+    color: #fff;
+    background: rgba(var(--neon), .1);
+    box-shadow: inset 0 0 0 1px rgba(var(--neon), .35), 0 0 12px rgba(var(--neon), .15);
+  }
+  .planets button:focus-visible { outline: 2px solid rgb(var(--neon)); outline-offset: 2px; }
+  .planets i { width: 11px; height: 11px; border-radius: 50%; background: var(--c); box-shadow: 0 0 6px rgba(255, 255, 255, .25); }
+
+  /* ---------- 人造衛星 ---------- */
+  .sat {
+    position: fixed; top: 9vh; right: 5vw;
+    width: clamp(150px, 17vw, 240px);
+    pointer-events: none;
+  }
+  .sat svg { display: block; width: 100%; overflow: visible; }
+  .craft { transform-box: fill-box; transform-origin: center; animation: bob 7s ease-in-out infinite; }
+  .waves path { opacity: 0; animation: wave 2.4s ease-out infinite; }
+  .waves path:nth-child(2) { animation-delay: .4s; }
+  .waves path:nth-child(3) { animation-delay: .8s; }
+  .beacon { animation: blink 1.6s steps(1) infinite; }
+  @keyframes bob { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-10px) rotate(1.5deg); } }
+  @keyframes wave { 0% { opacity: 0; transform: translateX(4px); } 30% { opacity: 1; } 100% { opacity: 0; transform: translateX(-8px); } }
+  @keyframes blink { 0%, 60% { opacity: 1; } 61%, 100% { opacity: .15; } }
+
+  /* ---------- 主畫面 ---------- */
+  main {
+    position: relative; z-index: 1;
+    height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 28px;
+    padding: 0 16px 20vh;
+  }
+  .caption {
+    font: 500 12px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    letter-spacing: .3em;
+    color: var(--muted);
+  }
+  #time {
+    font: 300 clamp(72px, 19vw, 200px)/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+    text-shadow: 0 0 40px rgba(var(--tint), .3);
+    transition: text-shadow 1s;
+  }
+
+  .track {
+    position: relative;
+    width: min(520px, 100% - 48px);
+    height: 2px;
+    background: var(--line);
+    border-radius: 2px;
+  }
+  .fill {
+    height: 100%; width: 0;
+    border-radius: 2px;
+    background: linear-gradient(90deg, rgba(var(--neon), .15), rgb(var(--neon)));
+    box-shadow: 0 0 8px rgba(var(--neon), .6);
+    transition: width .25s linear;
+  }
+  .rocket {
+    position: absolute; top: 50%; left: 0;
+    width: 72px; height: 44px;
+    transform: translate(-50%, -50%);
+    transition: left .25s linear;
+    filter: drop-shadow(0 0 6px rgba(var(--neon), .3));
+  }
+
+  /* ---------- 控制按鈕 ---------- */
+  @property --spin { syntax: "<angle>"; inherits: false; initial-value: 0deg; }
+  .controls { display: flex; gap: 14px; flex-wrap: wrap; justify-content: center; }
+  .controls button {
+    --glow: var(--neon);
+    --x: 50%; --y: 50%;
+    position: relative; overflow: hidden; isolation: isolate;
+    font: 600 15px/1 inherit; font-family: inherit; letter-spacing: .14em;
+    padding: 14px 30px;
+    border-radius: 999px;
+    border: 1px solid rgba(var(--glow), .22);
+    background: linear-gradient(180deg, rgba(var(--glow), .08), rgba(var(--glow), .02)), rgba(6, 12, 26, .55);
+    color: #9fb4c9;
+    box-shadow: inset 0 0 14px rgba(var(--glow), .08);
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    transition: transform .25s cubic-bezier(.2, .8, .2, 1), box-shadow .3s, color .25s, border-color .3s, text-shadow .3s, opacity .2s;
+  }
+  /* 懸停時繞行邊框的光點 */
+  .controls button::before {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    border-radius: inherit; padding: 1.5px;
+    background: conic-gradient(from var(--spin), transparent 0 55%, rgba(var(--glow), .9) 75%, #fff 80%, transparent 90%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    opacity: 0;
+    transition: opacity .3s;
+    animation: spin 2.2s linear infinite;
+  }
+  /* 跟著游標走的聚光 */
+  .controls button::after {
+    content: ""; position: absolute; inset: 0; z-index: -1;
+    background: radial-gradient(90px circle at var(--x) var(--y), rgba(var(--glow), .3), transparent 70%);
+    opacity: 0;
+    transition: opacity .3s;
+  }
+  .controls button:hover:not(:disabled) {
+    transform: translateY(-2px) scale(1.03);
+    color: #effdff;
+    border-color: rgba(var(--glow), .5);
+    text-shadow: 0 0 10px rgba(var(--glow), .9);
+    box-shadow: inset 0 0 18px rgba(var(--glow), .2), 0 0 24px rgba(var(--glow), .35), 0 10px 24px rgba(0, 0, 0, .45);
+  }
+  .controls button:hover:not(:disabled)::before,
+  .controls button:hover:not(:disabled)::after { opacity: 1; }
+  .controls button:active:not(:disabled) { transform: translateY(0) scale(.96); transition-duration: .08s; }
+  .controls button:focus-visible { outline: 2px solid rgb(var(--glow)); outline-offset: 3px; }
+  .controls button:disabled { opacity: .35; cursor: default; }
+
+  #launch {
+    --glow: 255, 150, 100;
+    color: #fff;
+    border-color: rgba(255, 205, 170, .55);
+    background: linear-gradient(135deg, #ff9154, #ff4f2e);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 18px rgba(255, 107, 61, .45);
+  }
+  #launch:not(:disabled):not(:hover):not(.boom) { animation: breathe 2.8s ease-in-out infinite; }
+  #launch:hover:not(:disabled) {
+    color: #fff;
+    text-shadow: 0 0 10px rgba(255, 240, 220, .9);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 0 34px rgba(255, 120, 70, .7), 0 10px 24px rgba(0, 0, 0, .45);
+  }
+
+  .controls button.boom { animation: boom .7s ease-out; }
+  .ripple {
+    position: absolute; z-index: -1;
+    width: 12px; height: 12px; margin: -6px 0 0 -6px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255, 255, 255, .75), rgba(var(--glow), .4) 55%, transparent 70%);
+    pointer-events: none;
+    animation: ripple .65s ease-out forwards;
+  }
+  @keyframes spin { to { --spin: 360deg; } }
+  @keyframes ripple { to { transform: scale(24); opacity: 0; } }
+  @keyframes boom { from { box-shadow: 0 0 0 0 rgba(var(--glow), .7); } to { box-shadow: 0 0 0 22px rgba(var(--glow), 0); } }
+  @keyframes breathe {
+    0%, 100% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 14px rgba(255, 107, 61, .35); }
+    50% { box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 28px rgba(255, 107, 61, .65); }
+  }
+
+  #status { font-size: 13px; letter-spacing: .2em; color: var(--muted); min-height: 1em; }
+
+  @media (max-width: 640px) {
+    .sat { top: 72px; right: 8px; width: 110px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+<canvas id="bg" aria-hidden="true"></canvas>
+
+<nav class="planets" aria-label="目標行星">
+  <button data-p="earth"><i style="--c:radial-gradient(circle at 35% 35%,#9be15d,#1f5fe0 60%,#0a2a6e)"></i>地球</button>
+  <button data-p="mars"><i style="--c:radial-gradient(circle at 35% 35%,#f5c49b,#c2531f 55%,#3d1409)"></i>火星</button>
+  <button data-p="venus"><i style="--c:radial-gradient(circle at 35% 35%,#fff4d2,#dcab47 55%,#5c3d0c)"></i>金星</button>
+  <button data-p="jupiter"><i style="--c:repeating-linear-gradient(170deg,#fbf1dc 0 2px,#c88a55 2px 4px,#94461f 4px 5px)"></i>木星</button>
+</nav>
+
+<div class="sat" aria-hidden="true"><svg id="sat" viewBox="-120 -85 240 170"></svg></div>
+
+<main>
+  <p class="caption">MISSION T–MINUS</p>
+  <div id="time" role="timer" aria-live="off">25:00</div>
+
+  <div class="track" aria-hidden="true">
+    <div class="fill" id="fill"></div>
+    <canvas class="rocket" id="rocket"></canvas>
+  </div>
+
+  <div class="controls">
+    <button id="launch">發射</button>
+    <button id="hold" disabled>待機</button>
+    <button id="abort">返航</button>
+  </div>
+  <p id="status" aria-live="polite">待命</p>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const TAU = Math.PI * 2;
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---------- 計時器 ---------- */
+const TOTAL = 25 * 60 * 1000;
+let remaining = TOTAL, endAt = 0, tick = 0;
+
+function render() {
+  const ms = endAt ? Math.max(0, endAt - Date.now()) : remaining;
+  const s = Math.ceil(ms / 1000);
+  const text = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  const pct = (TOTAL - ms) / TOTAL * 100 + '%';
+  $('time').textContent = text;
+  document.title = text + ' · 任務計時器';
+  $('fill').style.width = pct;
+  $('rocket').style.left = pct;
+  if (endAt && ms === 0) stop('任務完成');
+}
+
+function stop(label) {
+  if (endAt) remaining = Math.max(0, endAt - Date.now());
+  endAt = 0;
+  clearInterval(tick);
+  $('launch').disabled = false;
+  $('hold').disabled = true;
+  $('status').textContent = label;
+}
+
+$('launch').onclick = () => {
+  if (remaining === 0) remaining = TOTAL;
+  endAt = Date.now() + remaining;
+  tick = setInterval(render, 200);
+  $('launch').disabled = true;
+  $('hold').disabled = false;
+  $('status').textContent = '飛行中';
+  render();
+};
+$('hold').onclick = () => { stop('待機中'); render(); };
+$('abort').onclick = () => { stop('待命'); remaining = TOTAL; render(); };
+
+// 按鈕：游標聚光 + 點擊漣漪與衝擊波
+for (const b of document.querySelectorAll('.controls button')) {
+  b.addEventListener('pointermove', e => {
+    const r = b.getBoundingClientRect();
+    b.style.setProperty('--x', e.clientX - r.left + 'px');
+    b.style.setProperty('--y', e.clientY - r.top + 'px');
+  });
+  b.addEventListener('pointerdown', e => {
+    const r = b.getBoundingClientRect(), s = document.createElement('span');
+    s.className = 'ripple';
+    s.style.left = e.clientX - r.left + 'px';
+    s.style.top = e.clientY - r.top + 'px';
+    s.onanimationend = () => s.remove();
+    b.append(s);
+    b.classList.remove('boom'); void b.offsetWidth; b.classList.add('boom');
+  });
+  b.addEventListener('animationend', e => { if (e.target === b && e.animationName === 'boom') b.classList.remove('boom'); });
+}
+
+/* ---------- 3D 火箭（迷你多邊形渲染：旋轉體 + 尾翼，沿軸自轉） ---------- */
+const rk = $('rocket'), rx = rk.getContext('2d'), RW = 72, RH = 44, RS = 50;
+const PROF = [[-.5,.12],[-.47,.1],[-.44,.155],[-.4,.16],[.1,.16],[.18,.152],[.26,.13],[.33,.1],[.4,.063],[.46,.028],[.5,0]];
+const radiusAt = x => { for (let i = 1; i < PROF.length; i++) { const [x0, r0] = PROF[i - 1], [x1, r1] = PROF[i]; if (x <= x1) return r0 + (r1 - r0) * (x - x0) / (x1 - x0); } return 0; };
+const XS = [-.5, -.47, -.44]; for (let x = -.4; x < .5; x += .045) XS.push(x); XS.push(.5);
+const RR = XS.map(radiusAt);
+const FIN = [[-.14,.155],[-.43,.34],[-.52,.34],[-.4,.155]];
+const SEG = 20;
+const norm = v => { const n = Math.hypot(...v); return v.map(c => c / n); };
+const RL = norm([-.55, .65, .55]), HV = norm([RL[0], RL[1], RL[2] + 1]);
+
+function hullColor(x, j) {
+  if (x < -.44) return [95, 105, 122];                  // 噴嘴
+  if (x > .2 || (x > -.08 && x < -.02)) return [255, 107, 61];  // 鼻錐、腰帶
+  if (x > .03 && x < .13 && (j === 0 || j === 1)) return [20, 50, 110]; // 舷窗
+  return [232, 238, 248];
+}
+function shade(c, n) {
+  const d = Math.max(0, n[0] * RL[0] + n[1] * RL[1] + n[2] * RL[2]);
+  const h = Math.max(0, n[0] * HV[0] + n[1] * HV[1] + n[2] * HV[2]) ** 30;
+  const rim = (1 - Math.abs(n[2])) ** 3;
+  const cyan = [110, 220, 255];
+  return `rgb(${c.map((v, i) => Math.min(255, Math.round(v * (.3 + .7 * d) + 255 * h * .8 + cyan[i] * rim * .45))).join(',')})`;
+}
+
+function drawRocket(t, running) {
+  rx.clearRect(0, 0, RW, RH);
+  const roll = t * (running ? 3e-3 : 8e-4);
+  const yaw = -.42 + Math.sin(t * 1.1e-3) * .08, pitch = .22;
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const T = (x, y, z) => { const x1 = x * cyw + z * syw, z1 = -x * syw + z * cyw; return [x1, y * cp - z1 * sp, y * sp + z1 * cp]; };
+  const S = v => [RW / 2 + v[0] * RS, RH / 2 - v[1] * RS];
+
+  // 尾焰（畫在最後面）
+  const tail = S(T(-.5, 0, 0)), d = T(-1, 0, 0);
+  const len = (running ? 17 : 7) * (.85 + Math.random() * .3);
+  rx.save();
+  rx.translate(tail[0], tail[1]);
+  rx.rotate(Math.atan2(-d[1], d[0]));
+  const g = rx.createLinearGradient(0, 0, len, 0);
+  g.addColorStop(0, '#fff6d8'); g.addColorStop(.3, '#ffc15e');
+  g.addColorStop(.65, 'rgba(255,107,61,.8)'); g.addColorStop(1, 'rgba(255,80,40,0)');
+  rx.fillStyle = g;
+  rx.beginPath(); rx.ellipse(len / 2 - 1, 0, len / 2 + 1, running ? 4.5 : 3, 0, 0, TAU); rx.fill();
+  rx.restore();
+
+  const polys = [];
+  for (let i = 0; i < XS.length - 1; i++) {
+    const x0 = XS[i], x1 = XS[i + 1], r0 = RR[i], r1 = RR[i + 1];
+    const slope = (r1 - r0) / (x1 - x0), nl = Math.hypot(1, slope), xm = (x0 + x1) / 2;
+    for (let j = 0; j < SEG; j++) {
+      const a0 = j / SEG * TAU + roll, a1 = (j + 1) / SEG * TAU + roll, am = (a0 + a1) / 2;
+      const n = T(-slope / nl, Math.cos(am) / nl, Math.sin(am) / nl);
+      if (n[2] <= 0) continue;
+      const c0 = Math.cos(a0), s0 = Math.sin(a0), c1 = Math.cos(a1), s1 = Math.sin(a1);
+      polys.push([[T(x0, r0 * c0, r0 * s0), T(x1, r1 * c0, r1 * s0), T(x1, r1 * c1, r1 * s1), T(x0, r0 * c1, r0 * s1)], n, hullColor(xm, j)]);
+    }
+  }
+  for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2 + Math.PI / 4 + roll, c = Math.cos(a), s = Math.sin(a);
+    let n = T(0, -s, c);
+    if (n[2] < 0) n = n.map(v => -v);
+    polys.push([FIN.map(([x, r]) => T(x, r * c, r * s)), n, [226, 85, 46]]);
+  }
+  const depth = p => p[0].reduce((z, v) => z + v[2], 0) / p[0].length;
+  polys.sort((a, b) => depth(a) - depth(b));
+  rx.lineWidth = .6;
+  for (const [pts, n, c] of polys) {
+    rx.fillStyle = rx.strokeStyle = shade(c, n);
+    rx.beginPath();
+    pts.forEach((v, i) => { const [sx, sy] = S(v); i ? rx.lineTo(sx, sy) : rx.moveTo(sx, sy); });
+    rx.closePath(); rx.fill(); rx.stroke();
+  }
+}
+
+/* ---------- 人造衛星（等角投影 SVG，風格參考扁平插畫） ---------- */
+(() => {
+  const U = 20, P = (a, b, c) => [(a - b) * .866 * U, (a + b) * .5 * U - c * U];
+  const pt = p => P(...p).map(v => v.toFixed(1)).join(',');
+  const poly = (pts, fill, stroke = '#3d7cf0') => `<polygon points="${pts.map(pt).join(' ')}" fill="${fill}" stroke="${stroke}" stroke-width="1.2" stroke-linejoin="round"/>`;
+  const line = (p, q, stroke, w) => { const [x1, y1] = P(...p), [x2, y2] = P(...q); return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round"/>`; };
+  const box = (a0, a1, b0, b1, c0, c1, [top, fa, fb], stroke) =>
+    poly([[a0, b0, c1], [a1, b0, c1], [a1, b1, c1], [a0, b1, c1]], top, stroke) +
+    poly([[a1, b0, c0], [a1, b1, c0], [a1, b1, c1], [a1, b0, c1]], fa, stroke) +
+    poly([[a0, b1, c0], [a1, b1, c0], [a1, b1, c1], [a0, b1, c1]], fb, stroke);
+  const CUBE = ['#f5f9ff', '#d3e2ff', '#aac6ff'];
+  const panel = a0 => {
+    let s = box(a0, a0 + 1.3, -.62, .62, -.05, .05, ['#10204a', '#2b5bd0', '#1d47ad'], '#5b9bff');
+    for (let k = 1; k < 3; k++) {
+      s += line([a0 + k * 1.3 / 3, -.62, .05], [a0 + k * 1.3 / 3, .62, .05], '#6ea8ff', .7);
+      s += line([a0, -.62 + k * 1.24 / 3, .05], [a0 + 1.3, -.62 + k * 1.24 / 3, .05], '#6ea8ff', .7);
+    }
+    return s;
+  };
+  let s = `<defs><linearGradient id="orb" gradientUnits="userSpaceOnUse" x1="-460" x2="460">
+      <stop offset="0" stop-color="#c8e1ff" stop-opacity="0"/><stop offset=".5" stop-color="#c8e1ff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#c8e1ff" stop-opacity="0"/></linearGradient></defs>
+    <path d="M-460,-120 C-200,-20 200,40 460,80" fill="none" stroke="url(#orb)" stroke-width="1"/>
+    <g class="craft">`;
+  s += line([-4.8, 0, 0], [-.8, 0, 0], '#8fb4ff', 2.5) + panel(-4.75) + panel(-3.3);
+  // 後方模組：頂面點陣 + 信標
+  s += box(-.3, .3, -.95, -.75, -.3, .3, CUBE) + box(-.6, .6, -2.1, -.95, -.6, .6, CUBE);
+  for (const a of [-.3, 0, .3]) for (const b of [-1.82, -1.52, -1.22]) { const [x, y] = P(a, b, .6); s += `<circle cx="${x}" cy="${y}" r="1.6" fill="#3d7cf0"/>`; }
+  const [bx, by] = P(0, -1.52, .6);
+  s += `<line x1="${bx}" y1="${by}" x2="${bx}" y2="${by - 12}" stroke="#8fb4ff" stroke-width="1.2"/><circle class="beacon" cx="${bx}" cy="${by - 13}" r="2.4" fill="#14d3b0"/>`;
+  // 主艙 + 十字
+  s += box(-.8, .8, -.8, .8, -.8, .8, CUBE);
+  s += poly([[-.45, .8, -.14], [.45, .8, -.14], [.45, .8, .14], [-.45, .8, .14]], '#14d3b0', 'none');
+  s += poly([[-.14, .8, -.45], [.14, .8, -.45], [.14, .8, .45], [-.14, .8, .45]], '#14d3b0', 'none');
+  // 天線碟：朝左下方的星球發送訊號
+  const [dx, dy] = P(.1, 1.7, -.9);
+  s += line([0, .8, -.5], [.1, 1.7, -.9], '#8fb4ff', 2);
+  s += `<g transform="translate(${dx} ${dy}) rotate(-45)">
+      <path d="M0,-17 L12,0 L0,17 Z" fill="#b8cfff" stroke="#3d7cf0" stroke-width="1.2" stroke-linejoin="round"/>
+      <ellipse rx="6" ry="17" fill="#f5f9ff" stroke="#3d7cf0" stroke-width="1.2"/>
+      <ellipse cx="-1" rx="3.5" ry="12" fill="#dde9ff"/>
+      <line x1="0" y1="0" x2="-13" y2="0" stroke="#3d7cf0" stroke-width="1.2"/>
+      <circle cx="-14" r="2.2" fill="#14d3b0"/>
+      <g class="waves" fill="none" stroke="#7df9ff" stroke-width="1.4" stroke-linecap="round">
+        <path d="M-20,-6 Q-25,0 -20,6"/><path d="M-27,-9 Q-34,0 -27,9"/><path d="M-34,-12 Q-43,0 -34,12"/>
+      </g></g>`;
+  s += line([.8, 0, 0], [4.8, 0, 0], '#8fb4ff', 2.5) + panel(2) + panel(3.45) + '</g>';
+  $('sat').innerHTML = s;
+})();
+
+/* ---------- 背景：軌道視角的星球 ---------- */
+const cv = $('bg'), ctx = cv.getContext('2d');
+
+// 星星座標寫死：[x, y, 半徑, 亮度]，x/y 為畫面比例
+const STARS = [
+  [.04,.08,.8,.7],[.11,.21,.6,.5],[.17,.05,1.1,.9],[.23,.33,.5,.4],[.29,.14,.7,.6],
+  [.34,.42,.6,.35],[.38,.07,.5,.5],[.43,.24,.9,.8],[.47,.12,.5,.4],[.52,.37,.6,.45],
+  [.56,.04,.8,.7],[.61,.19,.5,.5],[.65,.29,1.2,.9],[.69,.09,.6,.55],[.73,.46,.5,.35],
+  [.77,.17,.7,.6],[.81,.03,.5,.5],[.85,.27,.9,.75],[.89,.12,.6,.5],[.94,.38,.5,.4],
+  [.97,.06,.8,.65],[.07,.44,.7,.45],[.14,.58,.5,.3],[.2,.49,.6,.4],[.26,.63,.5,.3],
+  [.31,.55,.8,.5],[.4,.6,.5,.3],[.45,.5,.6,.35],[.58,.56,.5,.3],[.63,.47,.7,.45],
+  [.71,.61,.5,.3],[.79,.52,.6,.4],[.87,.6,.5,.3],[.92,.5,.8,.5],[.02,.3,.5,.4],
+  [.09,.66,.6,.3],[.33,.28,.5,.45],[.5,.02,.6,.6],[.54,.27,.5,.4],[.75,.33,.6,.5],
+  [.83,.41,.5,.35],[.99,.22,.6,.5],[.19,.12,.5,.45],[.41,.16,.6,.5],[.6,.1,.5,.45],
+  [.67,.39,.5,.35],[.96,.67,.5,.3],[.27,.04,.6,.55],[.13,.35,.9,.6],[.88,.2,.5,.45],
+  [.36,.68,.5,.25],[.66,.66,.5,.25],[.49,.44,.8,.5],[.72,.24,.5,.4],[.06,.55,.5,.35]
+];
+
+// 16 階漸層色票
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+function ramp(stops, n = 16) {
+  const c = stops.map(hex), out = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1) * (c.length - 1), k = Math.min(c.length - 2, Math.floor(t)), f = t - k;
+    out.push(`rgb(${c[k].map((v, j) => Math.round(v + (c[k + 1][j] - v) * f)).join(',')})`);
+  }
+  return out;
+}
+// 便宜的球面「雲團」函數，經度用整數頻率所以接縫連續
+const blob = (p, l) => .5 + .22 * (Math.sin(3 * l + 1.7 * Math.sin(4 * p)) + .6 * Math.sin(5 * l - 3 * p + 1.3) + .4 * Math.sin(2 * l + 7 * p));
+
+const PLANETS = {
+  earth: {
+    glow: [90, 165, 255], haze: 1.05, disk: '#030a1c',
+    colors: ramp(['#0a2a6e', '#1f5fe0', '#43b8f5', '#1fbf8f', '#9be15d', '#f2f8ff']),
+    tone: (p, l) => { if (p > 1.25) return 1; const n = blob(p, l); return n < .58 ? n / .58 * .45 : .6 + (n - .58) / .42 * .25; }
+  },
+  mars: {
+    glow: [255, 150, 110], haze: 1.03, disk: '#140604',
+    colors: ramp(['#3d1409', '#7f2e12', '#c2531f', '#e8894a', '#f5c49b', '#fff5ec']),
+    tone: (p, l) => p > 1.3 ? 1 : .1 + blob(p, l) * .7
+  },
+  venus: {
+    glow: [255, 215, 130], haze: 1.08, disk: '#140d02',
+    colors: ramp(['#5c3d0c', '#a8741d', '#dcab47', '#f2d88c', '#fff4d2']),
+    tone: (p, l) => .5 + .45 * Math.sin(p * 5 + 1.6 * Math.sin(2 * l + 3 * p))
+  },
+  jupiter: {
+    glow: [240, 190, 140], haze: 1.05, disk: '#120904', ring: true,
+    colors: ramp(['#4e230e', '#94461f', '#c88a55', '#e7c698', '#fbf1dc']),
+    tone: (p, l) => {
+      const dl = (l - 1.2 + Math.PI) % TAU - Math.PI, dp = p - .62;       // 大紅斑
+      if ((dl * Math.cos(p) / .16) ** 2 + (dp / .08) ** 2 < 1) return .12;
+      return .5 + .45 * Math.sin(p * 18 + .4 * Math.sin(3 * l + 6 * p));
+    }
+  }
+};
+
+// 光環粒子：固定種子，每次載入都一樣
+const RING_COLORS = ['#f6e7c8', '#d9b98a', '#9c7a55'];
+const RING = (() => {
+  let seed = 7; const rnd = () => (seed = seed * 16807 % 2147483647) / 2147483647;
+  const bands = [[2.15, 2.19, .45, 2], [2.21, 2.28, 1, 0], [2.295, 2.305, .3, 2], [2.32, 2.36, .7, 1]];
+  const N = 60000, th = new Float32Array(N), rr = new Float32Array(N), w = new Float32Array(N), br = new Float32Array(N), ci = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const [r0, r1, b, c] = bands[rnd() * bands.length | 0];
+    rr[i] = r0 + rnd() * (r1 - r0);
+    th[i] = rnd() * TAU;
+    w[i] = (2.2 / rr[i]) ** 1.5;           // 內圈轉得快
+    br[i] = b * (.5 + .5 * rnd());
+    ci[i] = c;
+  }
+  return { th, rr, w, br, ci };
+})();
+
+// 依「色階 × 透明度」分桶，一桶一次 fill，避免每點切換 fillStyle
+const AL = 16, BK = [];
+function dot(ci, a, x, y, s) {
+  if (a < .03) return;
+  const k = ci * AL + Math.min(AL - 1, a * AL | 0);
+  (BK[k] ||= new Path2D()).rect(x - s / 2, y - s / 2, s, s);
+}
+function flush(colors, mul) {
+  for (let k = 0; k < BK.length; k++) {
+    if (!BK[k]) continue;
+    ctx.fillStyle = colors[k / AL | 0];
+    ctx.globalAlpha = ((k % AL) + .5) / AL * mul;
+    ctx.fill(BK[k]);
+    BK[k] = null;
+  }
+}
+
+// 光源左上（x 右、y 上、z 朝向觀者）
+const L = norm([-.75, .45, .35]);
+const TILT = .5, ct = Math.cos(TILT), st = Math.sin(TILT);
+let W, H, R, cx, cy, phi, lam, cph, sph, tones = {};
+
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  W = innerWidth; H = innerHeight;
+  cv.width = W * dpr; cv.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const rd = Math.max(devicePixelRatio || 1, 2);
+  rk.width = RW * rd; rk.height = RH * rd;
+  rx.setTransform(rd, 0, 0, rd, 0, 0);
+  R = Math.max(W, H);
+  cx = W / 2;
+  cy = H * .74 + R;             // 星球頂端落在畫面 74% 高度，只露出下方一道弧
+  const d = 13 / R, p = [], l = [];
+  for (let a = Math.PI / 2 - d / 2; a > .1; a -= d) {
+    const n = Math.max(1, Math.round(TAU * Math.cos(a) / d));
+    for (let j = 0; j < n; j++) { p.push(a); l.push(j / n * TAU); }
+  }
+  phi = Float32Array.from(p); lam = Float32Array.from(l);
+  cph = phi.map(Math.cos); sph = phi.map(Math.sin);
+  tones = {};
+}
+const toneOf = key => tones[key] ||= Uint8Array.from(phi, (p, i) => Math.round(Math.min(1, Math.max(0, PLANETS[key].tone(p, lam[i]))) * 15));
+
+function drawRing(t, mul) {
+  const { th, rr, w, br, ci } = RING, w0 = t * 5e-6;
+  const se = Math.sin(.49), cr = Math.cos(-.08), sr = Math.sin(-.08);
+  for (let i = 0; i < th.length; i++) {
+    const a = (th[i] + w0 * w[i]) % TAU;
+    if (Math.abs(a - Math.PI / 2) > .42) continue;        // 只算看得到的那一段
+    const x0 = rr[i] * Math.cos(a), y0 = rr[i] * Math.sin(a) * se;
+    const X = x0 * cr - y0 * sr, Y = x0 * sr + y0 * cr;
+    const sx = cx + X * R, sy = cy - Y * R;
+    if (sx < -2 || sx > W + 2 || sy < -2 || sy > H + 2) continue;
+    dot(ci[i], br[i] * (.35 + .65 * Math.min(1, Math.max(0, .55 - X * .9))), sx, sy, 1.2);
+  }
+  flush(RING_COLORS, mul);
+}
+
+function drawPlanet(key, mul, t, solid) {
+  const P = PLANETS[key], [r, g, b] = P.glow;
+  // 大氣輝光：外圈圓心往光源偏，受光側較厚
+  const gr = ctx.createRadialGradient(cx, cy, R, cx - R * .02, cy - R * .012, R * P.haze);
+  gr.addColorStop(0, `rgba(${r},${g},${b},.55)`);
+  gr.addColorStop(.25, `rgba(${r},${g},${b},.2)`);
+  gr.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.globalAlpha = mul;
+  ctx.fillStyle = gr;
+  ctx.fillRect(0, 0, W, H);
+
+  if (P.ring) drawRing(t, mul);   // 光環在星球後方，本體會蓋住被遮的部分
+
+  const pa = solid ? 1 : mul;
+  ctx.globalAlpha = pa;
+  ctx.fillStyle = P.disk;
+  ctx.beginPath(); ctx.arc(cx, cy, R, 0, TAU); ctx.fill();
+
+  const tone = toneOf(key), rot = t * 4e-6;
+  for (let i = 0; i < phi.length; i++) {
+    const a = lam[i] + rot, z0 = cph[i] * Math.cos(a);
+    const z = sph[i] * st + z0 * ct;
+    if (z <= 0) continue;                                   // 背面
+    const y = sph[i] * ct - z0 * st, sy = cy - y * R;
+    if (sy > H + 2) continue;
+    const x = cph[i] * Math.sin(a), sx = cx + x * R;
+    if (sx < -2 || sx > W + 2) continue;
+    const lit = Math.max(0, x * L[0] + y * L[1] + z * L[2]);
+    const rim = (1 - z) ** 4;                               // 越靠輪廓越亮
+    dot(tone[i], Math.min(1, .06 + lit * .6 + rim * (.3 + lit * .7)), sx, sy, 1.5);
+  }
+  flush(P.colors, pa);
+}
+
+let cur = 'earth', prev = null, mixStart = 0;
+try { const saved = localStorage.getItem('mt-planet'); if (PLANETS[saved]) cur = saved; } catch {}
+
+function draw(t) {
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#03050b';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff';
+  for (const [x, y, r, a] of STARS) {
+    ctx.globalAlpha = a;
+    ctx.beginPath(); ctx.arc(x * W, y * H, r, 0, TAU); ctx.fill();
+  }
+  // 切換行星時交叉漸變 1.2 秒
+  const m = prev ? Math.min(1, (t - mixStart) / 1200) : 1;
+  if (m >= 1) prev = null;
+  if (prev) drawPlanet(prev, 1 - m, t, true);
+  drawPlanet(cur, m, t, !prev);
+  drawRocket(t, !!endAt);
+}
+
+function setPlanet(key) {
+  for (const b of document.querySelectorAll('.planets button')) b.setAttribute('aria-pressed', b.dataset.p === key);
+  document.body.style.setProperty('--tint', PLANETS[key].glow.join(','));
+  try { localStorage.setItem('mt-planet', key); } catch {}
+  if (key === cur) return;
+  if (!still) { prev = cur; mixStart = performance.now(); }
+  cur = key;
+  if (still) draw(0);
+}
+for (const b of document.querySelectorAll('.planets button')) b.onclick = () => setPlanet(b.dataset.p);
+
+let last = -1e9;
+function loop(t) {
+  if (t - last > 33) { draw(t); last = t; }       // ~30fps 就夠了
+  requestAnimationFrame(loop);
+}
+addEventListener('resize', () => { resize(); draw(still ? 0 : performance.now()); });
+resize();
+setPlanet(cur);
+still ? draw(0) : requestAnimationFrame(loop);
+</script>
+</body>
+</html>
