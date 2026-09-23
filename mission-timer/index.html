@@ -215,6 +215,7 @@
 <main>
   <p class="caption">MISSION T–MINUS</p>
   <div id="time" role="timer" aria-live="off">25:00</div>
+  <p class="caption" id="sun">日出 --:-- ／ 日落 --:--</p>
 
   <div class="track" aria-hidden="true">
     <div class="fill" id="fill"></div>
@@ -270,6 +271,15 @@ $('launch').onclick = () => {
 };
 $('hold').onclick = () => { stop('待機中'); render(); };
 $('abort').onclick = () => { stop('待命'); remaining = TOTAL; render(); };
+
+// 今天台北的日出／日落（Open-Meteo，免金鑰）；失敗就顯示「離線」
+fetch('https://api.open-meteo.com/v1/forecast?latitude=25.03&longitude=121.56&daily=sunrise,sunset&timezone=Asia/Taipei&forecast_days=1', { signal: AbortSignal.timeout(8000) })
+  .then(r => r.ok ? r.json() : Promise.reject())
+  .then(({ daily }) => {
+    const hm = s => /T(\d\d:\d\d)/.exec(s)[1];   // "2026-09-23T05:40" → "05:40"
+    $('sun').textContent = `日出 ${hm(daily.sunrise[0])} ／ 日落 ${hm(daily.sunset[0])}`;
+  })
+  .catch(() => { $('sun').textContent = '離線'; });
 
 // 按鈕：游標聚光 + 點擊漣漪與衝擊波
 for (const b of document.querySelectorAll('.controls button')) {
