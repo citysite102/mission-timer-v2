@@ -297,6 +297,7 @@
     <button id="launch" class="primary">發射</button>
     <button id="hold" disabled>待機</button>
     <button id="abort">返航</button>
+    <button id="dock">停泊</button>
   </div>
   <p id="status" aria-live="polite">待命</p>
 </main>
@@ -306,6 +307,7 @@
 const DEFAULT_MIN = 25;                // 預設倒數分鐘數
 const PRESETS = [5, 15, 25, 45, 60];   // 時長彈窗的快捷分鐘數
 const MAX_MIN = 180;                   // 最長 MAX_MIN 分 59 秒
+const DOCK_MIN = 5;                    // 停泊（休息）分鐘數
 
 const $ = id => document.getElementById(id);
 const TAU = Math.PI * 2;
@@ -318,6 +320,7 @@ const mmss = ms => pad(Math.floor(ms / 60000)) + ':' + pad(Math.floor(ms / 1000)
 let total = DEFAULT_MIN * 60 * 1000;
 try { const v = +localStorage.getItem('mt-duration'); if (v > 0 && v <= MAX) total = v; } catch {}
 let remaining = total, endAt = 0, tick = 0;
+let mission = 0;                           // 停泊中暫存任務時長；0 代表不在停泊
 
 // 今日完成趟數：只有倒數跑到 0 才算（返航不算），本機午夜歸零
 const today = () => new Date().toLocaleDateString('sv');   // 本機日期 "2026-10-03"
@@ -340,7 +343,10 @@ function render() {
   if (document.title !== text + ' · 任務計時器') document.title = text + ' · 任務計時器';
   $('fill').style.width = pct;
   $('rocket').style.left = pct;
-  if (endAt && ms === 0) { countDone(1); stop('任務完成'); }
+  if (endAt && ms === 0) {
+    if (mission) { stop('停泊結束'); undock(); }   // 休息不算趟數
+    else { countDone(1); stop('任務完成'); }
+  }
 }
 
 function stop(label) {
@@ -350,6 +356,7 @@ function stop(label) {
   $('launch').disabled = false;
   $('hold').disabled = true;
   $('openSet').disabled = false;
+  $('dock').disabled = false;
   $('status').textContent = label;
 }
 
@@ -360,11 +367,25 @@ $('launch').onclick = () => {
   $('launch').disabled = true;
   $('hold').disabled = false;
   $('openSet').disabled = true;            // 飛行中不能改時長
-  $('status').textContent = '飛行中';
+  $('dock').disabled = true;
+  $('status').textContent = mission ? '停泊中' : '飛行中';
   render();
 };
 $('hold').onclick = () => { stop('待機中'); render(); };
-$('abort').onclick = () => { stop('待命'); remaining = total; render(); };
+$('abort').onclick = () => { stop('待命'); undock(); remaining = total; render(); };
+
+// 停泊：直接開始 DOCK_MIN 分鐘休息，結束或返航後回到原本的任務時長
+function undock() {
+  if (!mission) return;
+  total = remaining = mission;
+  mission = 0;
+  render();
+}
+$('dock').onclick = () => {
+  if (!mission) mission = total;
+  total = remaining = DOCK_MIN * 60 * 1000;
+  $('launch').onclick();
+};
 
 // 時長設定彈窗
 const dlg = $('setDlg'), inMin = $('inMin'), inSec = $('inSec');
@@ -377,6 +398,7 @@ const markPreset = () => {
 $('durLabel').textContent = mmss(total);
 render();
 $('openSet').onclick = () => {
+  undock();                                // 停泊暫停時改時長，等於結束停泊
   inMin.value = Math.floor(total / 60000);
   inSec.value = pad(Math.floor(total / 1000) % 60);
   $('setErr').textContent = '';
