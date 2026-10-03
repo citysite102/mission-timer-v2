@@ -292,7 +292,7 @@
 <main>
   <p class="caption">MISSION T–MINUS</p>
   <div id="time" role="timer" aria-live="off"><span id="mmss">25:00</span><small id="cs">.00</small></div>
-  <p class="caption" id="sun">日出 --:-- ／ 日落 --:--</p>
+  <p class="caption"><span id="sun">日出 --:-- ／ 日落 --:--</span> ／ <span id="done">今日 0 趟</span></p>
 
   <div class="track" aria-hidden="true">
     <div class="fill" id="fill"></div>
@@ -320,6 +320,18 @@ let total = 25 * 60 * 1000;
 try { const v = +localStorage.getItem('mt-duration'); if (v > 0 && v <= MAX) total = v; } catch {}
 let remaining = total, endAt = 0, tick = 0;
 
+// 今日完成趟數：只有倒數跑到 0 才算（返航不算），本機午夜歸零
+const today = () => new Date().toLocaleDateString('sv');   // 本機日期 "2026-10-03"
+let done = { d: today(), n: 0 };
+try { const v = JSON.parse(localStorage.getItem('mt-today')); if (v?.d === done.d) done = v; } catch {}
+function countDone(add) {
+  if (done.d !== today()) done = { d: today(), n: 0 };
+  if (add) { done.n += add; try { localStorage.setItem('mt-today', JSON.stringify(done)); } catch {} }
+  $('done').textContent = `今日 ${done.n} 趟`;
+}
+countDone();
+setInterval(countDone, 60000);             // 頁面開過午夜也會歸零
+
 function render() {
   const ms = endAt ? Math.max(0, endAt - Date.now()) : remaining;
   const text = mmss(ms);
@@ -329,7 +341,7 @@ function render() {
   if (document.title !== text + ' · 任務計時器') document.title = text + ' · 任務計時器';
   $('fill').style.width = pct;
   $('rocket').style.left = pct;
-  if (endAt && ms === 0) stop('任務完成');
+  if (endAt && ms === 0) { countDone(1); stop('任務完成'); }
 }
 
 function stop(label) {

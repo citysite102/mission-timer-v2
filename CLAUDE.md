@@ -28,5 +28,6 @@ python3 -m http.server 8000 --directory mission-timer
 
 ## 必須保留的行為
 - `prefers-reduced-motion`：`still` 為 true 時只畫靜態一幀（`draw(0)`），CSS 也會關掉所有 animation。新加的動畫都要遵守這點。
-- localStorage 鍵為 `mt-duration`、`mt-planet`，讀寫一律包在 try/catch 裡。
+- 今日任務數：只有倒數自然跑到 0 才 +1（返航不算），以本機時間午夜歸零；存在 localStorage `mt-today`，刻意不跨裝置同步。
+- localStorage 鍵為 `mt-duration`、`mt-planet`、`mt-today`，讀寫一律包在 try/catch 裡。
 - 進度條、火箭、背景 canvas 都設了 aria-hidden；`#status` 是 aria-live。
