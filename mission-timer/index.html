@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>25:00 · 任務計時器</title>
+<title>任務計時器</title>
 <style>
   :root {
     --bg: #03050b;
@@ -259,7 +259,7 @@
 <div class="planets timer-set">
   <button id="openSet" aria-haspopup="dialog">
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1.5M6.5 1.5h3"/></svg>
-    時長 <b id="durLabel">25:00</b>
+    補給 <b id="durLabel"></b>
   </button>
 </div>
 
@@ -268,17 +268,11 @@
     <p class="caption">MISSION DURATION</p>
     <h2 id="setTitle">設定任務時長</h2>
     <div class="dur-inputs">
-      <label><input id="inMin" type="number" min="0" max="180" step="1" inputmode="numeric" required aria-label="分鐘">分</label>
+      <label><input id="inMin" type="number" min="0" step="1" inputmode="numeric" required aria-label="分鐘">分</label>
       <span class="colon" aria-hidden="true">:</span>
       <label><input id="inSec" type="number" min="0" max="59" step="1" inputmode="numeric" required aria-label="秒">秒</label>
     </div>
-    <div class="planets presets" role="group" aria-label="常用時長">
-      <button type="button" data-m="5"><span class="mono">05</span>分</button>
-      <button type="button" data-m="15"><span class="mono">15</span>分</button>
-      <button type="button" data-m="25"><span class="mono">25</span>分</button>
-      <button type="button" data-m="45"><span class="mono">45</span>分</button>
-      <button type="button" data-m="60"><span class="mono">60</span>分</button>
-    </div>
+    <div class="planets presets" role="group" aria-label="常用時長"></div>
     <p id="setErr" aria-live="polite"></p>
     <div class="controls">
       <button value="cancel" formnovalidate>取消</button>
@@ -291,7 +285,7 @@
 
 <main>
   <p class="caption">MISSION T–MINUS</p>
-  <div id="time" role="timer" aria-live="off"><span id="mmss">25:00</span><small id="cs">.00</small></div>
+  <div id="time" role="timer" aria-live="off"><span id="mmss"></span><small id="cs"></small></div>
   <p class="caption"><span id="sun">日出 --:-- ／ 日落 --:--</span> ／ <span id="done">今日 0 趟</span></p>
 
   <div class="track" aria-hidden="true">
@@ -308,15 +302,20 @@
 </main>
 
 <script>
+/* ---------- 設定 ---------- */
+const DEFAULT_MIN = 25;                // 預設倒數分鐘數
+const PRESETS = [5, 15, 25, 45, 60];   // 時長彈窗的快捷分鐘數
+const MAX_MIN = 180;                   // 最長 MAX_MIN 分 59 秒
+
 const $ = id => document.getElementById(id);
 const TAU = Math.PI * 2;
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 /* ---------- 計時器 ---------- */
-const MAX = (180 * 60 + 59) * 1000;
+const MAX = (MAX_MIN * 60 + 59) * 1000;
 const pad = n => String(n).padStart(2, '0');
 const mmss = ms => pad(Math.floor(ms / 60000)) + ':' + pad(Math.floor(ms / 1000) % 60);
-let total = 25 * 60 * 1000;
+let total = DEFAULT_MIN * 60 * 1000;
 try { const v = +localStorage.getItem('mt-duration'); if (v > 0 && v <= MAX) total = v; } catch {}
 let remaining = total, endAt = 0, tick = 0;
 
@@ -369,6 +368,8 @@ $('abort').onclick = () => { stop('待命'); remaining = total; render(); };
 
 // 時長設定彈窗
 const dlg = $('setDlg'), inMin = $('inMin'), inSec = $('inSec');
+inMin.max = MAX_MIN;
+document.querySelector('.presets').innerHTML = PRESETS.map(m => `<button type="button" data-m="${m}"><span class="mono">${pad(m)}</span>分</button>`).join('');
 const markPreset = () => {
   for (const b of document.querySelectorAll('.presets button'))
     b.setAttribute('aria-pressed', +b.dataset.m === +inMin.value && +inSec.value === 0);
