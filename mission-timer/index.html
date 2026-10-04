@@ -275,7 +275,7 @@
     <div class="planets presets" role="group" aria-label="常用時長"></div>
     <p id="setErr" aria-live="polite"></p>
     <div class="controls">
-      <button value="cancel" formnovalidate>取消</button>
+      <button type="button" id="cancelSet">取消</button>
       <button value="ok" class="primary">確認</button>
     </div>
   </form>
@@ -406,6 +406,7 @@ $('openSet').onclick = () => {
   dlg.showModal();
 };
 inMin.oninput = inSec.oninput = markPreset;
+$('cancelSet').onclick = () => dlg.close();
 for (const b of document.querySelectorAll('.presets button'))
   b.onclick = () => { inMin.value = b.dataset.m; inSec.value = '00'; markPreset(); };
 $('setForm').onsubmit = e => {
@@ -419,7 +420,9 @@ $('setForm').onsubmit = e => {
 };
 
 // 今天台北的日出／日落（Open-Meteo，免金鑰）；失敗就顯示「離線」
-fetch('https://api.open-meteo.com/v1/forecast?latitude=25.03&longitude=121.56&daily=sunrise,sunset&timezone=Asia/Taipei&forecast_days=1', { signal: AbortSignal.timeout(8000) })
+const sunCtl = new AbortController();
+setTimeout(() => sunCtl.abort(), 8000);   // AbortSignal.timeout 要 Safari 16，iOS 15 會直接丟錯
+fetch('https://api.open-meteo.com/v1/forecast?latitude=25.03&longitude=121.56&daily=sunrise,sunset&timezone=Asia/Taipei&forecast_days=1', { signal: sunCtl.signal })
   .then(r => r.ok ? r.json() : Promise.reject())
   .then(({ daily }) => {
     const hm = s => /T(\d\d:\d\d)/.exec(s)[1];   // "2026-09-23T05:40" → "05:40"

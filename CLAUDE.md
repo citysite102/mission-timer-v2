@@ -26,7 +26,8 @@ python3 -m http.server 8000 --directory mission-timer
   例：`fetch('https://api.open-meteo.com/…')`
 - **Open-Meteo 請求要設 8 秒逾時，失敗時顯示「離線」。**
   原因：網路不好時，畫面不能卡在讀取中。
-  例：`AbortSignal.timeout(8000)`；在 catch 裡把 `#sun` 改成「離線」。
+  例：`new AbortController()` 搭配 `setTimeout(() => ctl.abort(), 8000)`；在 catch 裡把 `#sun` 改成「離線」。
+  注意：不能用 `AbortSignal.timeout`，它要 Safari 16 才有，iOS 15 上會丟錯並中斷後面所有程式。
 - **UI 文字、註解、commit 訊息只能用繁體中文。**
   例：狀態文字寫「停泊結束」，不寫 "Docked"。
   例外：程式識別字（`endAt`）、技術名詞（canvas、localStorage）、commit 結尾的 `Co-Authored-By` 署名行。
