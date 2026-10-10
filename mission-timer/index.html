@@ -130,6 +130,8 @@
   .colon { padding-top: 10px; color: var(--muted); }
   .presets { position: static; flex-wrap: wrap; justify-content: center; }
   .presets button { padding: 8px 12px; }
+  .quick { position: static; }
+  .quick button { padding: 8px 13px; }
   #setErr { font-size: 12px; letter-spacing: .1em; color: #ff9a7a; min-height: 1em; }
 
   .track {
@@ -236,6 +238,18 @@
   }
 
   #status { font-size: 13px; letter-spacing: .2em; color: var(--muted); min-height: 1em; }
+  #stats {
+    position: fixed; bottom: 20px; left: 50%; z-index: 1;
+    transform: translateX(-50%);
+    max-width: calc(100% - 32px); width: max-content;
+    padding: 9px 16px;
+    letter-spacing: .15em; line-height: 1.6; text-align: center;
+    border-radius: 20px;
+    border: 1px solid rgba(var(--neon), .16);
+    background: rgba(6, 12, 26, .55);
+    backdrop-filter: blur(8px);
+  }
+  #stats span { white-space: nowrap; }   /* 窄螢幕只在「／」處換行 */
 
   @media (max-width: 640px) {
     .sat { top: 72px; right: 8px; width: 110px; }
@@ -286,12 +300,14 @@
 <main>
   <p class="caption">MISSION T–MINUS</p>
   <div id="time" role="timer" aria-live="off"><span id="mmss"></span><small id="cs"></small></div>
-  <p class="caption"><span id="sun">日出 --:-- ／ 日落 --:--</span> ／ <span id="done">今日 0 趟</span></p>
+  <p class="caption"><span id="sun">日出 --:-- ／ 日落 --:--</span></p>
 
   <div class="track" aria-hidden="true">
     <div class="fill" id="fill"></div>
     <canvas class="rocket" id="rocket"></canvas>
   </div>
+
+  <div class="planets quick" role="group" aria-label="快捷時長"></div>
 
   <div class="controls">
     <button id="launch" class="primary">發射</button>
@@ -301,6 +317,7 @@
   </div>
   <p id="status" aria-live="polite">待命</p>
 </main>
+<p class="caption" id="stats"></p>
 
 <script>
 /* ---------- 設定 ---------- */
@@ -308,6 +325,7 @@ const DEFAULT_MIN = 25;                // 預設倒數分鐘數
 const PRESETS = [5, 15, 25, 45, 60];   // 時長彈窗的快捷分鐘數
 const MAX_MIN = 180;                   // 最長 MAX_MIN 分 59 秒
 const DOCK_MIN = 5;                    // 停泊（休息）分鐘數
+const QUICK = [['近地', 15], ['繞月', 25], ['深空', 50]];   // 主畫面快捷時長：[名稱, 分鐘]
 
 /** @type {(id: string) => any} */
 const $ = id => document.getElementById(id);
@@ -325,17 +343,32 @@ try { const v = +localStorage.getItem('mt-duration'); if (v > 0 && v <= MAX) tot
 let remaining = total, endAt = 0, tick = 0;
 let mission = 0;                           // 停泊中暫存任務時長；0 代表不在停泊
 
-// 今日完成趟數：只有倒數跑到 0 才算（返航不算），本機午夜歸零
-const today = () => new Date().toLocaleDateString('sv');   // 本機日期 "2026-10-03"
-let done = { d: today(), n: 0 };
-try { const v = JSON.parse(localStorage.getItem('mt-today')); if (v?.d === done.d) done = v; } catch {}
-function countDone(add) {
-  if (done.d !== today()) done = { d: today(), n: 0 };
-  if (add) { done.n += add; try { localStorage.setItem('mt-today', JSON.stringify(done)); } catch {} }
-  $('done').textContent = `今日 ${done.n} 趟`;
+// 航行日誌：每趟任務一筆 { at: 出發時刻, min: 飛行分鐘數, ok: 是否完成 }；停泊不記
+// 今日趟數、總時數、連續出勤天數都從日誌算出，不另外存
+let log = [], tripAt = 0;                  // tripAt：這趟的出發時刻；0 代表沒有進行中的任務
+try { const v = JSON.parse(localStorage.getItem('mt-log')); if (Array.isArray(v)) log = v.filter(r => typeof r?.at === 'number' && typeof r.min === 'number'); } catch {}
+const day = t => new Date(t).toLocaleDateString('sv');      // 本機日期 "2026-10-03"
+function endTrip(ok) {
+  if (!tripAt) return;
+  log.push({ at: tripAt, min: +((ok ? total : total - remaining) / 60000).toFixed(2), ok });
+  tripAt = 0;
+  try { localStorage.setItem('mt-log', JSON.stringify(log)); } catch {}
+  renderStats();
 }
-countDone();
-setInterval(countDone, 60000);             // 頁面開過午夜也會歸零
+function renderStats() {
+  const today = day(Date.now());
+  const okDays = new Set(log.filter(r => r.ok).map(r => day(r.at)));
+  const n = log.filter(r => r.ok && day(r.at) === today).length;
+  const sum = Math.round(log.reduce((a, r) => a + r.min, 0));
+  // 連續出勤：有完成任務的連續天數；今天還沒完成不算中斷，從昨天往回數
+  const d = new Date();
+  if (!okDays.has(today)) d.setDate(d.getDate() - 1);
+  let streak = 0;
+  while (okDays.has(day(d))) { streak++; d.setDate(d.getDate() - 1); }
+  $('stats').innerHTML = `<span>今日 ${n} 趟</span> ／ <span>總計 ${Math.floor(sum / 60)} 小時 ${sum % 60} 分</span> ／ <span>連續 ${streak} 天</span>`;
+}
+renderStats();
+setInterval(renderStats, 60000);           // 頁面開過午夜也會更新
 
 function render() {
   const ms = endAt ? Math.max(0, endAt - Date.now()) : remaining;
@@ -348,7 +381,7 @@ function render() {
   $('rocket').style.left = pct;
   if (endAt && ms === 0) {
     if (mission) { stop('停泊結束'); undock(); }   // 休息不算趟數
-    else { countDone(1); stop('任務完成'); }
+    else { endTrip(true); stop('任務完成'); }
   }
 }
 
@@ -365,6 +398,7 @@ function stop(label) {
 
 $('launch').onclick = () => {
   if (remaining === 0) remaining = total;
+  if (!mission && !tripAt) tripAt = Date.now();
   endAt = Date.now() + remaining;
   tick = setInterval(render, 31);          // 約 30fps，小數點後兩位才跑得順
   $('launch').disabled = true;
@@ -375,18 +409,21 @@ $('launch').onclick = () => {
   render();
 };
 $('hold').onclick = () => { stop('待機中'); render(); };
-$('abort').onclick = () => { stop('待命'); undock(); remaining = total; render(); };
+$('abort').onclick = () => { stop('待命'); endTrip(false); undock(); remaining = total; render(); };
 
 // 停泊：直接開始 DOCK_MIN 分鐘休息，結束或返航後回到原本的任務時長
 function undock() {
   if (!mission) return;
   total = remaining = mission;
   mission = 0;
+  markQuick();
   render();
 }
 $('dock').onclick = () => {
+  endTrip(false);                          // 暫停中的任務改去停泊，等於中途返航
   if (!mission) mission = total;
   total = remaining = DOCK_MIN * 60 * 1000;
+  markQuick();
   $('launch').onclick();
 };
 
@@ -416,11 +453,28 @@ $('setForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok') return;
   const ms = (+inMin.value * 60 + +inSec.value) * 1000;
   if (!ms) { e.preventDefault(); $('setErr').textContent = '時長至少要 1 秒'; return; }
-  total = Math.min(ms, MAX);
+  setDuration(ms);
+};
+
+// 換時長：停下倒數（不自動開始）、結束停泊、記住新時長
+function setDuration(ms) {
+  stop('待命');
+  endTrip(false);                          // 任務中途換時長，等於中途返航
+  mission = 0;
+  total = remaining = Math.min(ms, MAX);
   try { localStorage.setItem('mt-duration', String(total)); } catch {}
   $('durLabel').textContent = mmss(total);
-  stop('待命'); remaining = total; render();
-};
+  markQuick();
+  render();
+}
+
+// 主畫面快捷時長
+document.querySelector('.quick').innerHTML = QUICK.map(([name, m]) => `<button type="button" data-m="${m}">${name} <span class="mono">${pad(m)}:00</span></button>`).join('');
+function markQuick() {
+  for (const b of $$('.quick button')) b.setAttribute('aria-pressed', +b.dataset.m * 60 * 1000 === total);
+}
+for (const b of $$('.quick button')) b.onclick = () => setDuration(+b.dataset.m * 60 * 1000);
+markQuick();
 
 // 今天台北的日出／日落（Open-Meteo，免金鑰）；失敗就顯示「離線」
 const sunCtl = new AbortController();
