@@ -4,7 +4,9 @@
 
 ## 使用方式
 
-直接用瀏覽器打開 `mission-timer/index.html` 即可。或在本機起一個靜態伺服器：
+線上版：<https://citysite102.github.io/mission-timer-v2/>，打開就能用。
+
+本機使用時，直接用瀏覽器打開 `mission-timer/index.html` 即可。或在本機起一個靜態伺服器：
 
 ```bash
 python3 -m http.server 8000 --directory mission-timer
