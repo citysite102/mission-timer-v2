@@ -32,20 +32,20 @@ npm run typecheck
   原因：零依賴，離線也能開，不會因為 CDN 掛掉而壞掉。
   例：日期格式化用 `toLocaleDateString`，不要裝 dayjs。
 - **執行期的外部請求只有 Open-Meteo 和 Supabase 兩個。**
-  原因：日出／日落需要即時資料，航行日誌需要跨裝置同步，其他功能都能在本機算出來。
-  例：`fetch('https://api.open-meteo.com/…')`、``fetch(`${SUPABASE_URL}/rest/v1/flight_log`)``
+  原因：日出／日落需要即時資料，航行日誌需要登入和跨裝置同步，其他功能都能在本機算出來。
+  例：`fetch('https://api.open-meteo.com/…')`、``fetch(`${SUPABASE_URL}/rest/v1/flight_log`)``、``fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`)``
 - **Supabase 只能用 `fetch` 直接呼叫 REST API，不能引入 supabase-js。**
   原因：維持零依賴，不靠 CDN。
-  例：`sbFetch()` 包好標頭和逾時，`syncOnce()` 用它 `POST` 和分頁 `GET /rest/v1/flight_log`。
+  例：`sbFetch()` 包好標頭和逾時，`authToken()` 用它登入和換新 token，`syncOnce()` 透過 `api()`（401 時自動換新 token 重試一次）`POST` 和分頁 `GET /rest/v1/flight_log`。
 - **外部請求都要設 8 秒逾時。Open-Meteo 失敗時顯示「離線」；Supabase 失敗時紀錄留在 `mt-pending`，之後補傳。**
   原因：網路不好時，畫面不能卡在讀取中，紀錄也不能因此遺失。
   例：`new AbortController()` 搭配 `setTimeout(() => ctl.abort(), 8000)`；在 catch 裡把 `#sun` 改成「離線」。
   注意：不能用 `AbortSignal.timeout`，它要 Safari 16 才有，iOS 15 上會丟錯並中斷後面所有程式。
-- **`index.html` 裡只能放 Supabase 的 publishable／anon key，絕對不能放 service_role（secret）key。**
+- **`index.html` 裡只能放 Supabase 的 publishable／anon key，絕對不能放 service_role（secret）key，也不能新增任何需要保密的設定。**
   原因：網頁原始碼是公開的，金鑰寫在設定區的 `SUPABASE_ANON_KEY`，任何人都看得到。能不能讀寫全靠 RLS。
   例：`const SUPABASE_ANON_KEY = 'sb_publishable_…'`
-- **`flight_log` 表的 RLS 只允許 `anon` 讀取（select）和新增（insert），不能加 update 或 delete 的規則。**
-  原因：金鑰是公開的，開放修改或刪除就等於任何人都能竄改或清空日誌。建表和規則的 SQL 在 README 的「Supabase 設定」。
+- **`flight_log` 表的 RLS 只允許登入的使用者（`authenticated`）讀取（select）和新增（insert）自己的紀錄（`user_id = auth.uid()`），`anon` 沒有任何權限，不能加 update 或 delete 的規則。**
+  原因：金鑰是公開的，只能靠登入身分區分資料；開放修改或刪除就等於能竄改或清空日誌。建表和規則的 SQL 在 README 的「Supabase 設定」。
 - **UI 文字、註解、commit 訊息只能用繁體中文。**
   例：狀態文字寫「停泊結束」，不寫 "Docked"。
   例外：程式識別字（`endAt`）、技術名詞（canvas、localStorage）、commit 結尾的 `Co-Authored-By` 署名行。
@@ -72,7 +72,7 @@ npm run typecheck
   例：「停泊」用預設的青色光效。
 - **主畫面上的操作按鈕只能用航太語彙命名，而且不能和現有的名稱重複。**
   原因：維持太空任務的主題；名稱重複會讓人分不清。
-  例：發射＝開始、待機＝暫停、返航＝重設、補給＝時長設定、停泊＝5 分鐘休息、近地／繞月／深空＝15／25／50 分鐘快捷時長。
+  例：發射＝開始、待機＝暫停、返航＝重設、補給＝時長設定、離艙＝登出、停泊＝5 分鐘休息、近地／繞月／深空＝15／25／50 分鐘快捷時長。
   例外：彈窗裡的「取消」「確認」等通用操作照常用一般說法。
 - **倒數相關的分鐘數只能在 `<script>` 最上方的「設定」區定義成常數（`DEFAULT_MIN`、`PRESETS`、`QUICK`、`MAX_MIN`、`DOCK_MIN`），其他地方一律引用常數。**
   原因：要調整時長只需改一個地方。
@@ -81,7 +81,7 @@ npm run typecheck
 
 ## 程式結構（index.html 的 `<script>` 由上而下）
 1. 計時器：用 `endAt`（目標時刻）推算剩餘時間。`render()` 約每 31ms 跑一次，負責更新數字、分頁標題、進度條和火箭位置。
-2. 航行日誌：`endTrip()` 把紀錄放進 `pending`（localStorage `mt-pending`），`sync()` 排隊呼叫 `syncOnce()`：先補傳 `pending`（成功後依內容移除已送出的紀錄），再分頁讀回整份 `flight_log` 放進 `cloud`。載入時和每 60 秒各同步一次。
+2. 航行日誌與登入：工作階段存在 `session`（localStorage `mt-session`），沒登入時 `body.out` 只顯示登入畫面。`endTrip()` 把紀錄連同 `uid` 放進 `pending`（localStorage `mt-pending`），`sync()` 排隊呼叫 `syncOnce()`：先補傳目前登入者的 `pending`（成功後依內容移除已送出的紀錄），再分頁讀回自己的 `flight_log` 放進 `cloud`。載入時、登入後和每 60 秒各同步一次。
 3. 時長設定：使用 `<dialog>` + `form method="dialog"`，範圍 1 秒到 `MAX`（180:59）；飛行中會停用 `#openSet`。主畫面的 `.quick` 快捷按鈕飛行中也能按，會透過 `setDuration()` 先停下倒數再換時長；補給彈窗確認時也走同一個函式。
 4. 3D 火箭：在 `#rocket` canvas 上手刻多邊形渲染（旋轉體 `PROF` 加四片尾翼，依深度排序）。
 5. 人造衛星：IIFE 產生等角投影的 SVG 字串，寫入 `#sat`。
@@ -117,7 +117,7 @@ npm run typecheck
   原因：有些使用者看到動態效果會不舒服。
   例：新動畫寫 `animation: pulse 2s infinite`。
   例外：滑鼠移上去的 `transition` 不受此限。
-- **航行日誌每趟任務記一筆 `{ at, min, ok }`（出發時刻、飛行分鐘數、是否完成），只有倒數自然跑到 0 才是 `ok: true`。寫進 Supabase 時對應 `started_at`、`minutes`、`completed` 三個欄位。**
+- **航行日誌每趟任務記一筆 `{ at, min, ok }`（出發時刻、飛行分鐘數、是否完成），只有倒數自然跑到 0 才是 `ok: true`。寫進 Supabase 時對應 `started_at`、`minutes`、`completed` 三個欄位；`user_id` 由資料庫預設值 `auth.uid()` 填入，前端不送。**
   原因：完成趟數代表真正完成的專注時段。
   例：`render()` 裡的 `endTrip(true)`；返航、暫停中改按停泊、中途換時長都走 `endTrip(false)`。
   例外：停泊（休息）不記；沒發射過就返航也不記。
@@ -127,11 +127,14 @@ npm run typecheck
 - **「今天」以本機時間為準，午夜換日。**
   原因：「今天」以使用者所在的時區為準。
   例：`toLocaleDateString('sv')`
-- **航行日誌存在 Supabase 的 `flight_log` 表，跨裝置同步；還沒寫進去的紀錄暫存在 localStorage `mt-pending`。**
-  原因：手機和電腦打開同一個網址，要看到同一份日誌。
+- **沒登入的人只能看到登入畫面，看不到計時器和任何紀錄。**
+  原因：日誌是個人的資料。
+  例：`showAuth()` 依 `session` 切換 `body.out`。
+- **航行日誌存在 Supabase 的 `flight_log` 表，每個帳號各自一份、跨裝置同步；還沒寫進去的紀錄連同 `uid` 暫存在 localStorage `mt-pending`，只補傳、只顯示目前登入者的。**
+  原因：同一個帳號在手機和電腦登入，要看到同一份日誌；換帳號登入時不能把別人的紀錄送到自己名下。
   例：`endTrip()` 先放進 `pending`，再呼叫 `sync()` 補傳並讀回整份日誌。
   例外：舊版的 `mt-log` 不再讀取，也不搬到雲端。
-- **localStorage 的鍵只能用 `mt-` 開頭，新增的鍵要補進這份清單：`mt-duration`、`mt-planet`、`mt-pending`。**
+- **localStorage 的鍵只能用 `mt-` 開頭，新增的鍵要補進這份清單：`mt-duration`、`mt-planet`、`mt-pending`、`mt-session`。**
   原因：避免和同網域的其他頁面衝突。
 - **每一次 localStorage 讀寫都要包在 try/catch 裡。**
   原因：無痕模式或封鎖網站資料時，存取會丟出例外，導致整頁壞掉。

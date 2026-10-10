@@ -20,49 +20,82 @@ python3 -m http.server 8000 --directory mission-timer
 | 待機 | 暫停 |
 | 返航 | 重設回設定的時長 |
 | 停泊 | 開始 5 分鐘休息 |
+| 離艙 | 登出，回到登入畫面（飛行中按下等於返航） |
 | 近地／繞月／深空 | 換成 15／25／50 分鐘（倒數中按下會先停下，不會自動開始） |
 
 左上角可以切換目標行星（地球、火星、金星、木星）；右上角的「補給」會開啟時長設定彈窗，可輸入分、秒或點選 5／15／25／45／60 分鐘，範圍 1 秒到 180 分 59 秒，飛行中不能開啟。兩項選擇都會記在瀏覽器裡。
 
 ## Supabase 設定
 
-航行日誌存在 Supabase。換成自己的專案時：
+航行日誌存在 Supabase，每個帳號各自一份。換成自己的專案時：
 
 1. 在 Supabase 的 SQL Editor 執行下面的 SQL，建立 `flight_log` 表並開啟 RLS。
 2. 到 Project Settings → API 複製 Project URL 和 publishable（anon public）key，填進 `mission-timer/index.html` 最上方設定區的 `SUPABASE_URL`、`SUPABASE_ANON_KEY`。**不要填 service_role（secret）key。**
+3. 到 Authentication → Users → Add user 建立帳號（勾選 Auto Confirm User）。畫面上沒有註冊功能，帳號都在後台建立。
 
 ```sql
 create table public.flight_log (
   id         bigint generated always as identity primary key,
-  started_at timestamptz  not null unique,         -- 出發時間；唯一，補傳重送時不會重複記
+  user_id    uuid         not null default auth.uid()      -- 誰飛的；由資料庫自動填入登入者，前端不送
+             references auth.users on delete cascade,
+  started_at timestamptz  not null,                -- 出發時間
   minutes    numeric(6,2) not null,                -- 飛行分鐘數
-  completed  boolean      not null                 -- 有沒有完成
+  completed  boolean      not null,                -- 有沒有完成
+  unique (user_id, started_at)                     -- 補傳重送時不會重複記
 );
 
 alter table public.flight_log enable row level security;
 
-revoke all on public.flight_log from anon;
-grant select, insert on public.flight_log to anon;
+revoke all on public.flight_log from anon, authenticated;
+grant select, insert on public.flight_log to authenticated;
 
-create policy "任何人可讀" on public.flight_log
-  for select to anon
-  using (true);
+create policy "只讀得到自己的紀錄" on public.flight_log
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
 
-create policy "任何人可新增合理的紀錄" on public.flight_log
-  for insert to anon
+create policy "只能新增自己的合理紀錄" on public.flight_log
+  for insert to authenticated
   with check (
-    minutes between 0 and 181
+    (select auth.uid()) = user_id
+    and minutes between 0 and 181
     and started_at <= now() + interval '5 minutes'
   );
 ```
 
-RLS 允許任何打開網頁的人讀取全部紀錄、新增分鐘數合理的紀錄；沒有修改和刪除的規則，所以沒有人能透過網頁竄改或清空日誌。
+從沒有登入功能的舊版升級時，改執行這段（**會刪掉表裡所有紀錄**，舊紀錄沒有擁有者，新規則下沒有人看得到）：
+
+```sql
+delete from public.flight_log;
+drop policy "任何人可讀" on public.flight_log;
+drop policy "任何人可新增合理的紀錄" on public.flight_log;
+alter table public.flight_log drop constraint flight_log_started_at_key;
+alter table public.flight_log
+  add column user_id uuid not null default auth.uid() references auth.users on delete cascade,
+  add constraint flight_log_user_id_started_at_key unique (user_id, started_at);
+
+revoke all on public.flight_log from anon, authenticated;
+grant select, insert on public.flight_log to authenticated;
+
+create policy "只讀得到自己的紀錄" on public.flight_log
+  for select to authenticated
+  using ((select auth.uid()) = user_id);
+
+create policy "只能新增自己的合理紀錄" on public.flight_log
+  for insert to authenticated
+  with check (
+    (select auth.uid()) = user_id
+    and minutes between 0 and 181
+    and started_at <= now() + interval '5 minutes'
+  );
+```
+
+沒登入的人（`anon`）沒有任何權限，什麼都讀不到。登入的人只能讀取、新增自己的紀錄，而且 `user_id` 由資料庫填入，無法冒用別人。沒有修改和刪除的規則，所以沒有人能透過網頁竄改或清空日誌，包括自己的。
 
 注意：
 
-- 這份日誌沒有分使用者。任何人打開這個網址完成任務，都會記進同一份日誌，也有人能刻意新增假紀錄。
-- 還沒填金鑰時，紀錄只存在這台裝置，畫面會一直顯示「待同步 N 趟」，填好金鑰後才會補傳。
-- 補傳時如果 Supabase 其實已經寫入、只是回應沒收到，或兩個分頁同時補傳，同一趟會送兩次；`started_at` 的唯一限制會讓重複的那筆被略過，不會多記。已經建好的舊表要另外執行 `alter table public.flight_log add constraint flight_log_started_at_key unique (started_at);`（表裡已有重複紀錄時會失敗，要先在後台手動刪掉多的那筆）。沒補這個限制的話，Supabase 會拒絕每一次補傳，紀錄會一直停在「待同步」。
+- publishable key 寫在網頁原始碼裡，是公開的，這是正常的；能讀寫什麼全由上面的 RLS 決定。
+- 任何人都能用公開金鑰呼叫 Supabase 的註冊 API 自己開帳號，但只會看到自己的空日誌。想完全擋掉，到 Authentication → Sign In / Providers 關掉「Allow new users to sign up」。
+- 登入後，連不上 Supabase 時計時器照常能用，紀錄先存在這台裝置，畫面會顯示「待同步 N 趟」，之後自動補傳。離艙時還沒送出的紀錄會留著，等同一個帳號下次登入再送。
 - 一批待同步的紀錄只要有一筆被 Supabase 拒絕（例如裝置時鐘快了 5 分鐘以上），整批都會一直重試、送不出去。
 
 ## 功能
@@ -70,7 +103,8 @@ RLS 允許任何打開網頁的人讀取全部紀錄、新增分鐘數合理的�
 - **倒數計時**：顯示格式為 `分:秒.百分之一秒`（例如 `24:59.87`），以目標時刻推算剩餘時間，分頁切到背景也不會累積誤差；分頁標題同步顯示到秒。
 - **日出／日落**：載入時向 [Open-Meteo](https://open-meteo.com/)（免金鑰）取得今天台北的日出與日落時間，顯示在倒數下方；取不到或逾時 8 秒則顯示「離線」。
 - **快捷時長**：控制按鈕上方的近地、繞月、深空一鍵換成 15、25、50 分鐘，目前的時長會亮起；倒數中按下會先停下，按「發射」才開始。和「補給」一樣會記住選擇。
-- **航行日誌**：每趟任務記下出發時間、飛行分鐘數（暫停的時間不算）、有沒有完成；倒數跑到 0 才算完成，中途返航或中途換時長記為未完成，停泊不記。畫面最下方顯示從日誌算出的今日完成趟數、總飛行時數、連續出勤天數（每天至少完成一趟；今天還沒完成不算中斷）。日誌存在 Supabase，手機和電腦打開同一個網址會看到同一份；連不上時先存在這台裝置，畫面會顯示「待同步 N 趟」，之後自動補傳。
+- **航行日誌**：每趟任務記下出發時間、飛行分鐘數（暫停的時間不算）、有沒有完成；倒數跑到 0 才算完成，中途返航或中途換時長記為未完成，停泊不記。畫面最下方顯示從日誌算出的今日完成趟數、總飛行時數、連續出勤天數（每天至少完成一趟；今天還沒完成不算中斷）。日誌存在 Supabase，每個帳號各自一份，同一個帳號在手機和電腦登入會看到同一份；連不上時先存在這台裝置，畫面會顯示「待同步 N 趟」，之後自動補傳。
+- **登入**：用電子郵件和密碼登入（Supabase Auth），沒登入只看得到登入畫面。登入狀態會記在瀏覽器裡，重新整理不用再登入；右上角「離艙」可登出，只登出這台裝置；同一個瀏覽器的其他分頁會跟著登入或登出。
 - **停泊（休息）**：一鍵開始 5 分鐘休息倒數，不記入航行日誌；跑完或返航後回到原本設定的時長。
 - **3D 火箭**：以 canvas 即時繪製的旋轉體火箭（機身、鼻錐、舷窗、四片尾翼），沿自身軸線自轉並隨進度前進；發射後轉速加快、尾焰變長。
 - **霓虹按鈕**：懸停時邊框有繞行光點、游標聚光、浮起與外發光；點擊有漣漪與外擴衝擊波。

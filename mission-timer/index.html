@@ -251,6 +251,33 @@
   }
   #stats span { white-space: nowrap; }   /* 窄螢幕只在「／」處換行 */
 
+  /* ---------- 登入 ---------- */
+  /* 沒登入：只留星空、登入卡片和 #status；登入後藏起登入卡片 */
+  body.out > :not(#bg, main), body.out main > :not(#login, #status), body:not(.out) #login { display: none; }
+  #login {
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    width: min(360px, 100%);
+    padding: 28px 24px 24px;
+    border: 1px solid rgba(var(--neon), .25);
+    border-radius: 24px;
+    background: rgba(6, 12, 26, .7);
+    box-shadow: inset 0 0 24px rgba(var(--neon), .06), 0 0 40px rgba(var(--neon), .12);
+    backdrop-filter: blur(14px);
+  }
+  #login h2 { font-size: 18px; font-weight: 600; letter-spacing: .12em; }
+  #login label { display: flex; flex-direction: column; gap: 8px; width: 100%; font-size: 12px; letter-spacing: .2em; color: var(--muted); }
+  #login input {
+    font: 15px/1.4 inherit; font-family: inherit; color: var(--ink);
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, .03);
+    border: 1px solid rgba(var(--neon), .2);
+    border-radius: 12px;
+    outline: none;
+    transition: border-color .2s, box-shadow .2s;
+  }
+  #login input:focus { border-color: rgba(var(--neon), .6); box-shadow: 0 0 0 3px rgba(var(--neon), .12); }
+  #who { max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
   @media (max-width: 640px) {
     .sat { top: 72px; right: 8px; width: 110px; }
     .timer-set { top: 72px; right: auto; left: 20px; }
@@ -275,6 +302,7 @@
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1.5M6.5 1.5h3"/></svg>
     補給 <b id="durLabel"></b>
   </button>
+  <button id="signOut">離艙 <span id="who" class="mono"></span></button>
 </div>
 
 <dialog id="setDlg" aria-labelledby="setTitle">
@@ -298,6 +326,12 @@
 <div class="sat" aria-hidden="true"><svg id="sat" viewBox="-120 -85 240 170"></svg></div>
 
 <main>
+  <form id="login">
+    <h2>機組登入</h2>
+    <label>電子郵件<input id="email" type="email" autocomplete="username" required></label>
+    <label>密碼<input id="password" type="password" autocomplete="current-password" required></label>
+    <div class="controls"><button class="primary">登入</button></div>
+  </form>
   <p class="caption">MISSION T–MINUS</p>
   <div id="time" role="timer" aria-live="off"><span id="mmss"></span><small id="cs"></small></div>
   <p class="caption"><span id="sun">日出 --:-- ／ 日落 --:--</span></p>
@@ -349,7 +383,8 @@ let mission = 0;                           // 停泊中暫存任務時長；0 �
 
 // 航行日誌：每趟任務一筆 { at: 出發時刻, min: 飛行分鐘數, ok: 是否完成 }；停泊不記
 // 今日趟數、總時數、連續出勤天數都從日誌算出，不另外存
-// cloud：從 Supabase 讀回的紀錄；pending：還沒寫進 Supabase 的紀錄，先放 localStorage，連上後補傳
+// cloud：從 Supabase 讀回的、登入者自己的紀錄；pending：還沒寫進 Supabase 的紀錄，先放 localStorage，連上後補傳
+// pending 每筆多記 uid（誰飛的），換帳號登入時只補傳、只顯示自己的；沒有 uid 的是登入功能上線前的舊紀錄，歸給下一個登入的人
 const valid = r => Number.isFinite(r?.at) && Number.isFinite(r.min) && typeof r.ok === 'boolean';
 let cloud = [], pending = [], tripAt = 0;  // tripAt：這趟的出發時刻；0 代表沒有進行中的任務
 // 每次改 pending 前都重讀 localStorage，別的分頁新增的紀錄才不會被蓋掉
@@ -358,59 +393,98 @@ function loadPending() {
 }
 const savePending = () => { try { localStorage.setItem('mt-pending', JSON.stringify(pending)); } catch {} };
 loadPending();
+// 工作階段 { access_token, refresh_token, id, email }；null 代表沒登入
+let session = null;
+const readSession = () => { try { return JSON.parse(localStorage.getItem('mt-session') || 'null'); } catch { return session; } };
+const saveSession = () => { try { session ? localStorage.setItem('mt-session', JSON.stringify(session)) : localStorage.removeItem('mt-session'); } catch {} };
+session = readSession();
+const mine = r => !r.uid || r.uid === session?.id;
 const day = t => new Date(t).toLocaleDateString('sv');      // 本機日期 "2026-10-03"
 function endTrip(ok) {
   if (!tripAt) return;
   loadPending();
-  pending.push({ at: tripAt, min: +((ok ? total : total - remaining) / 60000).toFixed(2), ok });
+  pending.push({ uid: session?.id, at: tripAt, min: +((ok ? total : total - remaining) / 60000).toFixed(2), ok });
   tripAt = 0;
   savePending();
   renderStats();
   sync();
 }
 
-// 同步：先補傳 pending，再讀回整份日誌。直接打 Supabase REST API，不引入 supabase-js
-// 新版 publishable key 只放 apikey 標頭；舊版 anon key 是 JWT，Authorization 也要帶
-const SB_HEADERS = { apikey: SUPABASE_ANON_KEY, ...(SUPABASE_ANON_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}) };
+// 同步：先補傳 pending，再讀回自己的日誌。直接打 Supabase REST／Auth API，不引入 supabase-js
+// 登入後 Authorization 帶使用者 token；沒登入時，新版 publishable key 只放 apikey，舊版 anon key 是 JWT 才放 Authorization
+const sbHeaders = jwt => {
+  jwt ||= SUPABASE_ANON_KEY.startsWith('eyJ') ? SUPABASE_ANON_KEY : '';
+  return { apikey: SUPABASE_ANON_KEY, ...(jwt ? { Authorization: `Bearer ${jwt}` } : {}) };
+};
 let syncing = Promise.resolve();
 const sync = () => (syncing = syncing.then(syncOnce).catch(() => {}));   // 排隊執行，避免同一筆被送兩次；出錯也不會卡住後面
 // 每個請求各自 8 秒逾時；AbortSignal.timeout 要 Safari 16，iOS 15 會直接丟錯
-async function sbFetch(query, opt = {}) {
+async function sbFetch(path, opt = {}, jwt = session?.access_token) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), 8000);
   try {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/flight_log${query}`, { ...opt, headers: { ...SB_HEADERS, ...opt.headers }, signal: ctl.signal });
+    const res = await fetch(SUPABASE_URL + path, { ...opt, headers: { ...sbHeaders(jwt), ...opt.headers }, signal: ctl.signal });
     if (!res.ok) throw new Error(String(res.status));
     return res;
   } finally { clearTimeout(timer); }
 }
-const tripKey = r => `${r.at}|${r.min}|${r.ok}`;
+// 登入或換新 token，回傳新的工作階段（不帶過期的 token）；失敗時丟出的 Error 訊息是 HTTP 狀態碼
+async function authToken(grant, body) {
+  const d = await (await sbFetch(`/auth/v1/token?grant_type=${grant}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, '')).json();
+  return { access_token: d.access_token, refresh_token: d.refresh_token, id: d.user.id, email: d.user.email };
+}
+// token 約一小時過期：收到 401 先換新再重試一次；refresh token 失效（400／401）才登出，斷線或 429 則保留登入
+// 途中只要換了帳號（這個分頁離艙再登入，或別的分頁換人），就不重送，避免把這批紀錄寫到別人名下
+async function api(path, opt) {
+  const me = session?.id;
+  try { return await sbFetch(path, opt); } catch (e) {
+    if (e.message !== '401' || !session) throw e;
+    const stored = readSession();
+    if (session?.id !== me || stored?.id !== me) throw e;
+    if (stored.access_token !== session.access_token) session = stored;   // 別的分頁已經換過新 token
+    else {
+      let next;
+      try { next = await authToken('refresh_token', { refresh_token: session.refresh_token }); } catch (e2) {
+        if (['400', '401'].includes(e2.message) && session?.id === me) switchUser(null, '登入已過期，請重新登入');
+        throw e2;
+      }
+      if (session?.id !== me || readSession()?.id !== me) throw e;   // 換新途中有人（這個或別的分頁）離艙或換帳號：結果作廢
+      session = next;
+      saveSession();
+    }
+    return sbFetch(path, opt);
+  }
+}
+const tripKey = r => `${r.uid}|${r.at}|${r.min}|${r.ok}`;
 async function syncOnce() {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return renderStats();   // 還沒填金鑰：只記在本機
+  if (!session) return renderStats();                          // 沒登入：紀錄留在本機，登入後再補傳
+  const me = session.id;
   try {
     loadPending();
-    if (pending.length) {
-      const sent = new Set(pending.map(tripKey));
-      const rows = pending.map(r => ({ started_at: new Date(r.at).toISOString(), minutes: r.min, completed: r.ok }));
-      // started_at 有唯一限制：上次其實已寫入但回應沒收到、或別的分頁同時補傳時，重複的那筆直接略過
-      await sbFetch('?on_conflict=started_at', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal,resolution=ignore-duplicates' }, body: JSON.stringify(rows) });
+    const mineNow = pending.filter(mine);
+    if (mineNow.length) {
+      const sent = new Set(mineNow.map(tripKey));
+      // user_id 由資料庫預設值 auth.uid() 填入，前端不送
+      const rows = mineNow.map(r => ({ started_at: new Date(r.at).toISOString(), minutes: r.min, completed: r.ok }));
+      // (user_id, started_at) 有唯一限制：上次其實已寫入但回應沒收到、或別的分頁同時補傳時，重複的那筆直接略過
+      await api('/rest/v1/flight_log?on_conflict=user_id,started_at', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal,resolution=ignore-duplicates' }, body: JSON.stringify(rows) });
       loadPending();
       pending = pending.filter(r => !sent.has(tripKey(r)));   // 依內容移除已送出的；別的分頁新增的紀錄留著下次送
       savePending();
     }
-    // Supabase 每次最多回 1000 筆，分頁讀到完
+    // RLS 只回傳自己的紀錄；Supabase 每次最多回 1000 筆，分頁讀到完
     const rows = [];
     for (let page; !page || page.length === 1000;) {
-      page = await (await sbFetch(`?select=started_at,minutes,completed&order=id&limit=1000&offset=${rows.length}`)).json();
+      page = await (await api(`/rest/v1/flight_log?select=started_at,minutes,completed&order=id&limit=1000&offset=${rows.length}`)).json();
       rows.push(...page);
     }
-    cloud = rows.map(r => ({ at: Date.parse(r.started_at), min: +r.minutes, ok: r.completed })).filter(valid);
+    if (session?.id === me) cloud = rows.map(r => ({ at: Date.parse(r.started_at), min: +r.minutes, ok: r.completed })).filter(valid);   // 同步途中換了帳號就丟掉
   } catch {}                                                   // 連不上就維持現狀，pending 下次再送
   renderStats();
 }
 
 function renderStats() {
-  const log = cloud.concat(pending);
+  const log = cloud.concat(pending.filter(mine));
   const today = day(Date.now());
   const okDays = new Set(log.filter(r => r.ok).map(r => day(r.at)));
   const n = log.filter(r => r.ok && day(r.at) === today).length;
@@ -421,8 +495,54 @@ function renderStats() {
   let streak = 0;
   while (okDays.has(day(d))) { streak++; d.setDate(d.getDate() - 1); }
   $('stats').innerHTML = `<span>今日 ${n} 趟</span> ／ <span>總計 ${Math.floor(sum / 60)} 小時 ${sum % 60} 分</span> ／ <span>連續 ${streak} 天</span>`
-    + (pending.length ? ` ／ <span>待同步 ${pending.length} 趟</span>` : '');
+    + (pending.some(mine) ? ` ／ <span>待同步 ${pending.filter(mine).length} 趟</span>` : '');
 }
+
+// 登入／離艙：沒登入時 body 加上 .out，只看得到登入畫面
+function showAuth() {
+  document.body.classList.toggle('out', !session);
+  $('who').textContent = session?.email || '';
+  if (!session) $('email').focus();
+}
+// 換人（登入、離艙、過期、別的分頁換帳號）都走這裡：先用原本的身分結束這趟，再切換
+function switchUser(next, msg) {
+  $('abort').onclick();                    // 飛行中換人等於返航；這趟記在原本的人名下，留在 pending 等他下次登入再送
+  $('setDlg').close();                     // 彈窗開著會擋住整頁，登入畫面就按不到
+  session = next;
+  saveSession();
+  cloud = [];
+  renderStats();
+  showAuth();
+  $('status').textContent = msg;
+  if (session) sync();
+}
+$('login').onsubmit = async e => {
+  e.preventDefault();
+  $('status').textContent = '登入中…';
+  let next;
+  try {
+    next = await authToken('password', { email: $('email').value.trim(), password: $('password').value });
+  } catch (err) {
+    const code = err.message;
+    $('status').textContent = code === '400' ? '電子郵件或密碼錯誤' : code === '429' ? '嘗試太多次，請稍後再試' : /^\d+$/.test(code) ? `登入失敗（錯誤碼 ${code}）` : '連不上，請稍後再試';
+    return;
+  }
+  $('password').value = '';
+  switchUser(next, '待命');
+};
+$('signOut').onclick = () => {
+  sbFetch('/auth/v1/logout?scope=local', { method: 'POST' }).catch(() => {});   // 只作廢這台裝置的 token，其他裝置不受影響；失敗也照樣登出
+  switchUser(null, '已離艙');
+};
+// 別的分頁登入、離艙或換新 token 時跟著同步
+addEventListener('storage', e => {
+  if (e.key !== 'mt-session') return;
+  const next = readSession();
+  if (next?.id === session?.id) session = next;           // 只是換了新 token
+  else switchUser(next, next ? '待命' : '已離艙');
+});
+showAuth();
+if (!session) $('status').textContent = '請先登入';
 renderStats();
 sync();
 setInterval(sync, 60000);                  // 每分鐘補傳並讀回別台裝置的紀錄；頁面開過午夜也會更新
