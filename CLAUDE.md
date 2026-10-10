@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 ## 專案概要
-單檔專注計時器，部署在 GitHub Pages。所有 HTML／CSS／JS 都在 `mission-timer/index.html`，沒有框架、建置步驟、套件或測試。
+單檔專注計時器，部署在 GitHub Pages。所有 HTML／CSS／JS 都在 `mission-timer/index.html`，沒有框架、建置步驟或測試。`package.json` 裡的套件只用來做 lint 和型別檢查，不會進到網頁裡。
 
 - **根目錄 `index.html` 只能放導向 `mission-timer/` 的內容。**
   原因：GitHub Pages 網址會先開這個檔，它只負責把人帶到計時器。
@@ -13,6 +13,16 @@
 python3 -m http.server 8000 --directory mission-timer
 ```
 （`.claude/launch.json` 已設定好 `mission-timer` 預覽，使用 port 8765。）
+
+## 檢查
+第一次要先跑 `npm install`。
+```bash
+npm run lint
+```
+```bash
+npm run typecheck
+```
+型別檢查會把 `<script>` 抽到 `.typecheck.js`（已 gitignore）再檢查，錯誤訊息的行號和 `mission-timer/index.html` 一致。
 
 ## 原則
 - **計時器的 HTML、CSS、JS 只能寫在 `mission-timer/index.html`。**
@@ -35,6 +45,12 @@ python3 -m http.server 8000 --directory mission-timer
   原因：README 是使用者唯一的說明文件。
   例：新增停泊時，同時補了按鈕表的一列和「功能」的一條。
   例外：不影響行為的重構、效能調整、純 bug 修正，不用更新。
+- **改完程式碼，`npm run lint` 和 `npm run typecheck` 都要沒有錯誤才算做完。**
+  原因：先讓工具抓掉寫錯的變數名稱、型別和語法錯誤。
+  例：型別檢查回報 `.typecheck.js(417,45)`，就去修 `index.html` 第 417 行，修完兩行指令都重跑一次。
+- **每次改完 `mission-timer/index.html`，都要先派 `code-reviewer` 檢查，通過後才能回報給使用者。**
+  原因：先讓審查者對照這份文件挑錯，使用者拿到的才會是已經檢查過的結果。
+  例：派它的時候附上改了哪些檔案、哪些範圍；被退回就照退回的理由修，修完再派一次，直到通過為止。
 
 ## 設計規範
 - **背景只能是深色星空，也就是 `#bg` canvas 畫的星星和星球。**

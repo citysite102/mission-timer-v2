@@ -309,7 +309,10 @@ const PRESETS = [5, 15, 25, 45, 60];   // 時長彈窗的快捷分鐘數
 const MAX_MIN = 180;                   // 最長 MAX_MIN 分 59 秒
 const DOCK_MIN = 5;                    // 停泊（休息）分鐘數
 
+/** @type {(id: string) => any} */
 const $ = id => document.getElementById(id);
+/** @type {(sel: string) => NodeListOf<any>} */
+const $$ = sel => document.querySelectorAll(sel);
 const TAU = Math.PI * 2;
 const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -392,7 +395,7 @@ const dlg = $('setDlg'), inMin = $('inMin'), inSec = $('inSec');
 inMin.max = MAX_MIN;
 document.querySelector('.presets').innerHTML = PRESETS.map(m => `<button type="button" data-m="${m}"><span class="mono">${pad(m)}</span>分</button>`).join('');
 const markPreset = () => {
-  for (const b of document.querySelectorAll('.presets button'))
+  for (const b of $$('.presets button'))
     b.setAttribute('aria-pressed', +b.dataset.m === +inMin.value && +inSec.value === 0);
 };
 $('durLabel').textContent = mmss(total);
@@ -407,14 +410,14 @@ $('openSet').onclick = () => {
 };
 inMin.oninput = inSec.oninput = markPreset;
 $('cancelSet').onclick = () => dlg.close();
-for (const b of document.querySelectorAll('.presets button'))
+for (const b of $$('.presets button'))
   b.onclick = () => { inMin.value = b.dataset.m; inSec.value = '00'; markPreset(); };
 $('setForm').onsubmit = e => {
   if (e.submitter?.value !== 'ok') return;
   const ms = (+inMin.value * 60 + +inSec.value) * 1000;
   if (!ms) { e.preventDefault(); $('setErr').textContent = '時長至少要 1 秒'; return; }
   total = Math.min(ms, MAX);
-  try { localStorage.setItem('mt-duration', total); } catch {}
+  try { localStorage.setItem('mt-duration', String(total)); } catch {}
   $('durLabel').textContent = mmss(total);
   stop('待命'); remaining = total; render();
 };
@@ -431,7 +434,7 @@ fetch('https://api.open-meteo.com/v1/forecast?latitude=25.03&longitude=121.56&da
   .catch(() => { $('sun').textContent = '離線'; });
 
 // 按鈕：游標聚光 + 點擊漣漪與衝擊波
-for (const b of document.querySelectorAll('.controls button')) {
+for (const b of $$('.controls button')) {
   b.addEventListener('pointermove', e => {
     const r = b.getBoundingClientRect();
     b.style.setProperty('--x', e.clientX - r.left + 'px');
@@ -534,6 +537,7 @@ function drawRocket(t, running) {
     poly([[a0, b0, c1], [a1, b0, c1], [a1, b1, c1], [a0, b1, c1]], top, stroke) +
     poly([[a1, b0, c0], [a1, b1, c0], [a1, b1, c1], [a1, b0, c1]], fa, stroke) +
     poly([[a0, b1, c0], [a1, b1, c0], [a1, b1, c1], [a0, b1, c1]], fb, stroke);
+  /** @type {[string, string, string]} */
   const CUBE = ['#f5f9ff', '#d3e2ff', '#aac6ff'];
   const panel = a0 => {
     let s = box(a0, a0 + 1.3, -.62, .62, -.05, .05, ['#10204a', '#2b5bd0', '#1d47ad'], '#5b9bff');
@@ -763,7 +767,7 @@ function draw(t) {
 }
 
 function setPlanet(key) {
-  for (const b of document.querySelectorAll('nav.planets button')) b.setAttribute('aria-pressed', b.dataset.p === key);
+  for (const b of $$('nav.planets button')) b.setAttribute('aria-pressed', b.dataset.p === key);
   document.body.style.setProperty('--tint', PLANETS[key].glow.join(','));
   try { localStorage.setItem('mt-planet', key); } catch {}
   if (key === cur) return;
@@ -771,7 +775,7 @@ function setPlanet(key) {
   cur = key;
   if (still) draw(0);
 }
-for (const b of document.querySelectorAll('nav.planets button')) b.onclick = () => setPlanet(b.dataset.p);
+for (const b of $$('nav.planets button')) b.onclick = () => setPlanet(b.dataset.p);
 
 let last = -1e9;
 function loop(t) {
