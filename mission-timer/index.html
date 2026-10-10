@@ -327,6 +327,10 @@ const MAX_MIN = 180;                   // 最長 MAX_MIN 分 59 秒
 const DOCK_MIN = 5;                    // 停泊（休息）分鐘數
 const QUICK = [['近地', 15], ['繞月', 25], ['深空', 50]];   // 主畫面快捷時長：[名稱, 分鐘]
 
+// 航行日誌存在 Supabase 的 flight_log 表；兩個值在 Supabase 後台 Project Settings → API
+const SUPABASE_URL = '';               // Project URL，例如 'https://abcd1234.supabase.co'（結尾不要加斜線）
+const SUPABASE_ANON_KEY = '';          // publishable／anon public key；絕對不能放 service_role（secret）key
+
 /** @type {(id: string) => any} */
 const $ = id => document.getElementById(id);
 /** @type {(sel: string) => NodeListOf<any>} */
@@ -345,17 +349,68 @@ let mission = 0;                           // 停泊中暫存任務時長；0 �
 
 // 航行日誌：每趟任務一筆 { at: 出發時刻, min: 飛行分鐘數, ok: 是否完成 }；停泊不記
 // 今日趟數、總時數、連續出勤天數都從日誌算出，不另外存
-let log = [], tripAt = 0;                  // tripAt：這趟的出發時刻；0 代表沒有進行中的任務
-try { const v = JSON.parse(localStorage.getItem('mt-log')); if (Array.isArray(v)) log = v.filter(r => typeof r?.at === 'number' && typeof r.min === 'number'); } catch {}
+// cloud：從 Supabase 讀回的紀錄；pending：還沒寫進 Supabase 的紀錄，先放 localStorage，連上後補傳
+const valid = r => Number.isFinite(r?.at) && Number.isFinite(r.min) && typeof r.ok === 'boolean';
+let cloud = [], pending = [], tripAt = 0;  // tripAt：這趟的出發時刻；0 代表沒有進行中的任務
+// 每次改 pending 前都重讀 localStorage，別的分頁新增的紀錄才不會被蓋掉
+function loadPending() {
+  try { const v = JSON.parse(localStorage.getItem('mt-pending') || '[]'); pending = Array.isArray(v) ? v.filter(valid) : []; } catch {}
+}
+const savePending = () => { try { localStorage.setItem('mt-pending', JSON.stringify(pending)); } catch {} };
+loadPending();
 const day = t => new Date(t).toLocaleDateString('sv');      // 本機日期 "2026-10-03"
 function endTrip(ok) {
   if (!tripAt) return;
-  log.push({ at: tripAt, min: +((ok ? total : total - remaining) / 60000).toFixed(2), ok });
+  loadPending();
+  pending.push({ at: tripAt, min: +((ok ? total : total - remaining) / 60000).toFixed(2), ok });
   tripAt = 0;
-  try { localStorage.setItem('mt-log', JSON.stringify(log)); } catch {}
+  savePending();
+  renderStats();
+  sync();
+}
+
+// 同步：先補傳 pending，再讀回整份日誌。直接打 Supabase REST API，不引入 supabase-js
+// 新版 publishable key 只放 apikey 標頭；舊版 anon key 是 JWT，Authorization 也要帶
+const SB_HEADERS = { apikey: SUPABASE_ANON_KEY, ...(SUPABASE_ANON_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SUPABASE_ANON_KEY}` } : {}) };
+let syncing = Promise.resolve();
+const sync = () => (syncing = syncing.then(syncOnce).catch(() => {}));   // 排隊執行，避免同一筆被送兩次；出錯也不會卡住後面
+// 每個請求各自 8 秒逾時；AbortSignal.timeout 要 Safari 16，iOS 15 會直接丟錯
+async function sbFetch(query, opt = {}) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 8000);
+  try {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/flight_log${query}`, { ...opt, headers: { ...SB_HEADERS, ...opt.headers }, signal: ctl.signal });
+    if (!res.ok) throw new Error(String(res.status));
+    return res;
+  } finally { clearTimeout(timer); }
+}
+const tripKey = r => `${r.at}|${r.min}|${r.ok}`;
+async function syncOnce() {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) return renderStats();   // 還沒填金鑰：只記在本機
+  try {
+    loadPending();
+    if (pending.length) {
+      const sent = new Set(pending.map(tripKey));
+      const rows = pending.map(r => ({ started_at: new Date(r.at).toISOString(), minutes: r.min, completed: r.ok }));
+      // started_at 有唯一限制：上次其實已寫入但回應沒收到、或別的分頁同時補傳時，重複的那筆直接略過
+      await sbFetch('?on_conflict=started_at', { method: 'POST', headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal,resolution=ignore-duplicates' }, body: JSON.stringify(rows) });
+      loadPending();
+      pending = pending.filter(r => !sent.has(tripKey(r)));   // 依內容移除已送出的；別的分頁新增的紀錄留著下次送
+      savePending();
+    }
+    // Supabase 每次最多回 1000 筆，分頁讀到完
+    const rows = [];
+    for (let page; !page || page.length === 1000;) {
+      page = await (await sbFetch(`?select=started_at,minutes,completed&order=id&limit=1000&offset=${rows.length}`)).json();
+      rows.push(...page);
+    }
+    cloud = rows.map(r => ({ at: Date.parse(r.started_at), min: +r.minutes, ok: r.completed })).filter(valid);
+  } catch {}                                                   // 連不上就維持現狀，pending 下次再送
   renderStats();
 }
+
 function renderStats() {
+  const log = cloud.concat(pending);
   const today = day(Date.now());
   const okDays = new Set(log.filter(r => r.ok).map(r => day(r.at)));
   const n = log.filter(r => r.ok && day(r.at) === today).length;
@@ -365,10 +420,12 @@ function renderStats() {
   if (!okDays.has(today)) d.setDate(d.getDate() - 1);
   let streak = 0;
   while (okDays.has(day(d))) { streak++; d.setDate(d.getDate() - 1); }
-  $('stats').innerHTML = `<span>今日 ${n} 趟</span> ／ <span>總計 ${Math.floor(sum / 60)} 小時 ${sum % 60} 分</span> ／ <span>連續 ${streak} 天</span>`;
+  $('stats').innerHTML = `<span>今日 ${n} 趟</span> ／ <span>總計 ${Math.floor(sum / 60)} 小時 ${sum % 60} 分</span> ／ <span>連續 ${streak} 天</span>`
+    + (pending.length ? ` ／ <span>待同步 ${pending.length} 趟</span>` : '');
 }
 renderStats();
-setInterval(renderStats, 60000);           // 頁面開過午夜也會更新
+sync();
+setInterval(sync, 60000);                  // 每分鐘補傳並讀回別台裝置的紀錄；頁面開過午夜也會更新
 
 function render() {
   const ms = endAt ? Math.max(0, endAt - Date.now()) : remaining;

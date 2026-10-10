@@ -15,7 +15,7 @@ tools: Read, Grep, Glob
 ## 檢查項目
 1. 倒數的分鐘數有沒有寫死在程式裡（CLAUDE.md 要求集中成設定）
 2. 畫面上的文字有沒有錯字、簡體字或沒必要的英文（範圍包含 HTML 文字、`aria-label`、`document.title`，以及 JS 寫進 `#status` 等元素的字串）
-3. 有沒有引入瀏覽器原生 API 以外的依賴，或 Open-Meteo 以外的外部請求、圖片、字型
+3. 有沒有引入瀏覽器原生 API 以外的依賴，或 Open-Meteo 和 Supabase 以外的外部請求、圖片、字型
 4. 新增或修改的 localStorage 讀寫，有沒有包在 try/catch 裡
 5. 新增的動畫有沒有遵守 `still`（使用者開啟「減少動態效果」時不播放）
 6. 剩餘時間是不是仍然用 `endAt - Date.now()` 計算
